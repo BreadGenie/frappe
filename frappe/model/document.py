@@ -553,6 +553,9 @@ class Document(BaseDocument):
 
 		self.load_children_from_db()
 
+		# Decrypt encrypted fields
+		self._decrypt_encrypted_fields()
+
 		# sometimes __setup__ can depend on child values, hence calling again at the end
 		if hasattr(self, "__setup__"):
 			self.__setup__()
@@ -567,6 +570,31 @@ class Document(BaseDocument):
 		for field in mask_fields:
 			val = self.get(field.fieldname)
 			self.set(field.fieldname, mask_field_value(field, val))
+
+	def _decrypt_encrypted_fields(self):
+		from frappe.utils.encryption import decrypt_document
+
+		if "meta" not in self.__dict__:
+			return
+		decrypt_document(self, meta=self.meta)
+
+	def _restore_original_encrypted_values(self):
+		"""Restore original plaintext values after saving to DB,
+		so post-save hooks (on_update, realtime events) see plaintext."""
+		originals = self.flags.get("_original_encrypted_values")
+		if originals:
+			for fieldname, original_val in originals.items():
+				self.set(fieldname, original_val)
+
+	def has_decrypt_permission(self, user=None) -> bool:
+		"""Return True if user may decrypt encrypted fields on this document.
+
+		Override this in child classes for custom logic (e.g., channel membership).
+		Defaults to read permission (backward compatible).
+		"""
+		if not user:
+			user = frappe.session.user
+		return self.has_permission("read", user=user)
 
 	def load_children_from_db(self):
 		is_doctype = self.doctype == "DocType"
@@ -738,6 +766,7 @@ class Document(BaseDocument):
 			self.copy_attachments_from_amended_from()
 
 		relink_mismatched_files(self)
+		self._restore_original_encrypted_values()
 		self.run_post_save_methods()
 		self.flags.in_insert = False
 
@@ -837,6 +866,7 @@ class Document(BaseDocument):
 
 		self.update_children()
 		self.reset_computed_child_tables()
+		self._restore_original_encrypted_values()
 		self.run_post_save_methods()
 
 		# clear unsaved flag
@@ -1053,6 +1083,15 @@ class Document(BaseDocument):
 		for d in self.get_all_children():
 			d.set("docstatus", docstatus)
 
+	def _save_encrypted_fields(self):
+		"""Encrypt fields marked as encrypted and store in Encryption Key table."""
+		from frappe.utils.encryption import store_encrypted_fields
+
+		if self.flags.ignore_save_passwords is True:
+			return
+
+		store_encrypted_fields(self, meta=self.meta)
+
 	def _validate(self):
 		self._validate_mandatory()
 		self._validate_data_fields()
@@ -1065,6 +1104,7 @@ class Document(BaseDocument):
 		self._extract_images_from_text_editor()
 		self._sanitize_content()
 		self._save_passwords()
+		self._save_encrypted_fields()
 		self.validate_workflow()
 
 		for d in self.get_all_children():
@@ -1078,6 +1118,7 @@ class Document(BaseDocument):
 			d._extract_images_from_text_editor()
 			d._sanitize_content()
 			d._save_passwords()
+			d._save_encrypted_fields()
 		if self.is_new():
 			# don't set fields like _assign, _comments for new doc
 			for fieldname in optional_fields:

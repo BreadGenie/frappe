@@ -1,0 +1,74 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-06-10 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+  "field_order": [
+   "ref_doctype",
+   "ref_docname",
+   "fieldname",
+   "encrypted_dek",
+   "ciphertext",
+   "blind_index"
+  ],
+  "fields": [
+   {
+    "fieldname": "ref_doctype",
+    "fieldtype": "Data",
+    "in_list_view": 1,
+    "label": "Reference DocType",
+    "reqd": 1
+   },
+   {
+    "fieldname": "ref_docname",
+    "fieldtype": "Data",
+    "in_list_view": 1,
+    "label": "Reference Document Name",
+    "reqd": 1
+   },
+   {
+    "fieldname": "fieldname",
+    "fieldtype": "Data",
+    "in_list_view": 1,
+    "label": "Fieldname",
+    "reqd": 1
+   },
+   {
+    "fieldname": "encrypted_dek",
+    "fieldtype": "Long Text",
+    "label": "Encrypted Data Encryption Key",
+    "reqd": 1
+   },
+   {
+    "fieldname": "ciphertext",
+    "fieldtype": "Long Text",
+    "label": "Ciphertext",
+    "reqd": 1
+   },
+   {
+    "fieldname": "blind_index",
+    "fieldtype": "Long Text",
+    "label": "Blind Index"
+   }
+  ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-10 00:00:00",
+ "modified_by": "Administrator",
+ "module": "Core",
+ "name": "Encryption Key",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "select": 1,
+   "read": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "ref_docname"
+}

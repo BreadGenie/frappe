@@ -95,6 +95,11 @@ def _get_site_config(sites_path: str, site_path: str) -> _dict[str, Any]:
 	# vice versa for dbname if not defined
 	config["db_name"] = os.environ.get("FRAPPE_DB_NAME") or config.get("db_name") or config["db_user"]
 
+	# Encryption key for field-level encryption (else auto-generated in utils/encryption.py)
+	encryption_key = os.environ.get("FRAPPE_ENCRYPTION_KEY") or config.get("encryption_key")
+	if encryption_key:
+		config["encryption_key"] = encryption_key
+
 	# Allow externally extending the config with hooks
 	if extra_config := config.get("extra_config"):
 		if isinstance(extra_config, str):

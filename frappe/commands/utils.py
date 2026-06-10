@@ -998,7 +998,99 @@ def setup_chrome():
 	setup_chromium()
 
 
+@click.command("encrypt-field")
+@click.argument("doctype")
+@click.argument("fieldname")
+@pass_context
+def encrypt_field(context, doctype, fieldname):
+	"""Encrypt a field for all documents of a DocType."""
+	import json
+
+	from frappe.utils.encryption import (
+		ENCRYPTED_PLACEHOLDER,
+		get_encrypted_field_meta,
+		is_encrypted_placeholder,
+		store_encrypted_fields,
+	)
+
+	site = get_site(context)
+	frappe.init(site)
+	frappe.connect()
+
+	meta = frappe.get_meta(doctype)
+	df = meta.get_field(fieldname)
+	is_json = df and df.fieldtype == "JSON"
+
+	names = frappe.db.get_all(doctype, pluck="name")
+	total = len(names)
+	click.echo(f"Encrypting {fieldname} on {total} documents of {doctype}...")
+
+	for i, name in enumerate(names):
+		doc = frappe.get_doc(doctype, name)
+		val = doc.get(fieldname)
+		if val and not is_encrypted_placeholder(val):
+			store_encrypted_fields(doc)
+			new_val = doc.get(fieldname)
+			if not is_encrypted_placeholder(new_val):
+				new_val = json.dumps(ENCRYPTED_PLACEHOLDER) if is_json else ENCRYPTED_PLACEHOLDER
+			doc.db_set(fieldname, new_val, update_modified=False)
+		update_progress_bar("Encrypting", i, total)
+
+	frappe.db.commit()
+	frappe.destroy()
+	click.echo(f"\nDone. Encrypted {fieldname} across {total} documents.")
+
+
+@click.command("decrypt-field")
+@click.argument("doctype")
+@click.argument("fieldname")
+@pass_context
+def decrypt_field(context, doctype, fieldname):
+	"""Decrypt a field for all documents of a DocType (reverse operation)."""
+	site = get_site(context)
+	frappe.init(site)
+	frappe.connect()
+
+	names = frappe.db.get_all(doctype, pluck="name")
+	total = len(names)
+	click.echo(f"Decrypting {fieldname} on {total} documents of {doctype}...")
+
+	EncryptionKey = frappe.qb.Table("tabEncryption Key")
+
+	for i, name in enumerate(names):
+		row = (
+			frappe.qb.from_(EncryptionKey)
+			.select(EncryptionKey.ciphertext, EncryptionKey.encrypted_dek)
+			.where(
+				(EncryptionKey.ref_doctype == doctype)
+				& (EncryptionKey.ref_docname == name)
+				& (EncryptionKey.fieldname == fieldname)
+			)
+		).run(as_dict=True)
+
+		if row:
+			from frappe.utils.encryption import decrypt_field_value
+
+			plaintext = decrypt_field_value(
+				row[0].encrypted_dek, row[0].ciphertext, doctype, name, fieldname
+			)
+			frappe.db.set_value(doctype, name, fieldname, plaintext, update_modified=False)
+			frappe.db.delete("Encryption Key", {
+				"ref_doctype": doctype,
+				"ref_docname": name,
+				"fieldname": fieldname,
+			})
+
+		update_progress_bar("Decrypting", i, total)
+
+	frappe.db.commit()
+	frappe.destroy()
+	click.echo(f"\nDone. Decrypted {fieldname} across {total} documents.")
+
+
 commands = [
+	encrypt_field,
+	decrypt_field,
 	build,
 	clear_cache,
 	clear_website_cache,

@@ -19,8 +19,9 @@
   "reqd",
   "is_virtual",
   "search_index",
-  "not_nullable",
-  "mask",
+   "not_nullable",
+   "mask",
+   "encrypted",
   "column_break_18",
   "options",
   "sort_options",
@@ -622,13 +623,21 @@
    "fieldtype": "Check",
    "label": "Sticky"
   },
-  {
-   "default": "0",
-   "depends_on": "eval:[\"Select\", \"Read Only\", \"Phone\", \"Percent\", \"Password\", \"Link\", \"Int\", \"Float\", \"Dynamic Link\", \"Duration\", \"Datetime\", \"Currency\", \"Data\", \"Date\"].includes(doc.fieldtype)",
-   "fieldname": "mask",
-   "fieldtype": "Check",
-   "label": "Mask"
-  },
+   {
+    "default": "0",
+    "depends_on": "eval:[\"Select\", \"Read Only\", \"Phone\", \"Percent\", \"Password\", \"Link\", \"Int\", \"Float\", \"Dynamic Link\", \"Duration\", \"Datetime\", \"Currency\", \"Data\", \"Date\"].includes(doc.fieldtype)",
+    "fieldname": "mask",
+    "fieldtype": "Check",
+    "label": "Mask"
+   },
+   {
+    "default": "0",
+    "depends_on": "eval:[\"Data\", \"Small Text\", \"Long Text\", \"Text\", \"Text Editor\", \"Code\", \"Markdown Editor\", \"HTML Editor\", \"JSON\"].includes(doc.fieldtype)",
+    "description": "Encrypt this field at rest. Decryption is gated by has_decrypt_permission.",
+    "fieldname": "encrypted",
+    "fieldtype": "Check",
+    "label": "Encrypted"
+   },
   {
    "depends_on": "eval:doc.fieldtype===\"Button\"",
    "fieldname": "button_color",
