@@ -140,7 +140,7 @@ def get_encrypted_field_meta(doctype: str, meta=None) -> list:
 	result = []
 	for df in meta.get("fields"):
 		if df.get("encrypted") and df.fieldtype in (
-			"Data", "Small Text", "Long Text", "Text", "Text Editor", "Code", "Markdown Editor", "HTML Editor", "JSON"
+			"Data", "Small Text", "Long Text", "Text", "Text Editor", "Code", "Markdown Editor", "HTML Editor", "JSON", "Link"
 		):
 			result.append(df)
 	return result
@@ -266,6 +266,69 @@ def decrypt_document(doc, meta=None) -> None:
 					_("Failed to decrypt {0} {1} {2}").format(doc.doctype, doc.name, df.fieldname),
 					_("Encryption Error"),
 				)
+
+	# Decrypt child table encrypted fields
+	for table_df in meta.get_table_fields():
+		child_doctype = table_df.options
+		child_encrypted_fields = get_encrypted_field_meta(child_doctype)
+		if not child_encrypted_fields:
+			continue
+
+		children = doc.get(table_df.fieldname) or []
+		if not children:
+			continue
+
+		if not doc.has_decrypt_permission(frappe.session.user):
+			for child in children:
+				for child_df in child_encrypted_fields:
+					if is_encrypted_placeholder(child.get(child_df.fieldname)):
+						child.set(child_df.fieldname, None)
+			continue
+
+		child_names = [c.name for c in children if c.name]
+		if not child_names:
+			continue
+
+		key_rows = (
+			frappe.qb.from_(frappe.qb.Table("tabEncryption Key"))
+			.select(
+				frappe.qb.Table("tabEncryption Key").ref_docname,
+				frappe.qb.Table("tabEncryption Key").fieldname,
+				frappe.qb.Table("tabEncryption Key").encrypted_dek,
+				frappe.qb.Table("tabEncryption Key").ciphertext,
+			)
+			.where(
+				(frappe.qb.Table("tabEncryption Key").ref_doctype == child_doctype)
+				& (frappe.qb.Table("tabEncryption Key").ref_docname.isin(child_names))
+			)
+		).run(as_dict=True)
+
+		if not key_rows:
+			continue
+
+		keys_by_child = {}
+		for r in key_rows:
+			keys_by_child.setdefault(r.ref_docname, {})[r.fieldname] = r
+
+		for child in children:
+			if child.name not in keys_by_child:
+				continue
+			child_keys = keys_by_child[child.name]
+			for child_df in child_encrypted_fields:
+				fn = child_df.fieldname
+				if fn in child_keys and is_encrypted_placeholder(child.get(fn)):
+					try:
+						plaintext = decrypt_field_value(
+							child_keys[fn].encrypted_dek,
+							child_keys[fn].ciphertext,
+							child.doctype, child.name, fn,
+						)
+						child.set(fn, plaintext)
+					except InvalidToken:
+						frappe.log_error(
+							_("Failed to decrypt {0} {1} {2}").format(child.doctype, child.name, fn),
+							_("Encryption Error"),
+						)
 
 
 def decrypt_document_fields(

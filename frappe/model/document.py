@@ -586,6 +586,12 @@ class Document(BaseDocument):
 			for fieldname, original_val in originals.items():
 				self.set(fieldname, original_val)
 
+		for child in self.get_all_children():
+			child_originals = child.flags.get("_original_encrypted_values")
+			if child_originals:
+				for fieldname, original_val in child_originals.items():
+					child.set(fieldname, original_val)
+
 	def has_decrypt_permission(self, user=None) -> bool:
 		"""Return True if user may decrypt encrypted fields on this document.
 
