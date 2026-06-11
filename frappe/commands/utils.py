@@ -1041,6 +1041,24 @@ def encrypt_field(context, doctype, fieldname):
 	click.echo(f"\nDone. Encrypted {fieldname} across {total} documents.")
 
 
+@click.command("recompute-blind-index")
+@click.argument("doctype")
+@click.argument("fieldname")
+@pass_context
+def recompute_blind_index(context, doctype, fieldname):
+	"""Recompute blind index for an encrypted field (e.g. after upgrading algorithm)."""
+	from frappe.utils.encryption import recompute_blind_index
+
+	site = get_site(context)
+	frappe.init(site)
+	frappe.connect()
+
+	count = recompute_blind_index(doctype, fieldname)
+	frappe.db.commit()
+	frappe.destroy()
+	click.echo(f"Recomputed blind_index for {count} Encryption Key rows ({doctype}.{fieldname}).")
+
+
 @click.command("decrypt-field")
 @click.argument("doctype")
 @click.argument("fieldname")
@@ -1091,6 +1109,7 @@ def decrypt_field(context, doctype, fieldname):
 commands = [
 	encrypt_field,
 	decrypt_field,
+	recompute_blind_index,
 	build,
 	clear_cache,
 	clear_website_cache,

@@ -226,6 +226,7 @@ def delete_doc(
 def add_to_deleted_document(doc):
 	"""Add this document to Deleted Document table. Called after delete"""
 	if doc.doctype != "Deleted Document" and frappe.flags.in_install != "frappe":
+		_restore_encrypted_placeholders(doc)
 		frappe.get_doc(
 			doctype="Deleted Document",
 			deleted_doctype=doc.doctype,
@@ -233,6 +234,47 @@ def add_to_deleted_document(doc):
 			data=doc.as_json(),
 			owner=frappe.session.user,
 		).db_insert()
+
+
+def _restore_encrypted_placeholders(doc):
+	"""Restore ``<<encrypted>>`` placeholders before Deleted Document snapshot.
+
+	Prevents plaintext encrypted field values from leaking into
+	``tabDeleted Documents`` when a document is trashed.
+	"""
+	from frappe.utils.encryption import (
+		ENCRYPTED_PLACEHOLDER,
+		get_encrypted_field_meta,
+		is_encrypted_placeholder,
+	)
+
+	import json
+
+	for df in get_encrypted_field_meta(doc.doctype):
+		val = doc.get(df.fieldname)
+		if val is not None and not is_encrypted_placeholder(val):
+			placeholder = (
+				json.dumps(ENCRYPTED_PLACEHOLDER)
+				if df.fieldtype == "JSON"
+				else ENCRYPTED_PLACEHOLDER
+			)
+			doc.set(df.fieldname, placeholder)
+
+	for table_df in doc.meta.get_table_fields():
+		child_fields = get_encrypted_field_meta(table_df.options)
+		if not child_fields:
+			continue
+		children = doc.get(table_df.fieldname) or []
+		for child in children:
+			for child_df in child_fields:
+				val = child.get(child_df.fieldname)
+				if val is not None and not is_encrypted_placeholder(val):
+					placeholder = (
+						json.dumps(ENCRYPTED_PLACEHOLDER)
+						if child_df.fieldtype == "JSON"
+						else ENCRYPTED_PLACEHOLDER
+					)
+					child.set(child_df.fieldname, placeholder)
 
 
 def update_naming_series(doc):

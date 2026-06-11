@@ -73,32 +73,44 @@ def is_encrypted_placeholder(value) -> bool:
 
 
 def compute_blind_index(text: str) -> str:
-	"""Compute a blind index for search: space-separated sha256 hashes of each word.
+	"""Compute a trigram blind index for substring search.
 
-	Words are lowercased, split on whitespace/punctuation, each hashed with SHA-256.
-	Hashes are sorted so search terms match regardless of word order.
+	Text is lowercased, padded with ``^`` and ``$``, then split into
+	overlapping 3-character trigrams.  Each trigram is hashed with SHA-256
+	and the hashes are sorted alphabetically so search terms match
+	regardless of word order.
+
+	Substring search works because a stored trigram set contains all
+	trigrams of ``^text$``, and a search query must match *every* query
+	trigram — the longer the query the more precise the match.
+
+	Returns empty string for empty/whitespace-only input.
 	"""
-	words = re.findall(r"\w+", text.lower())
-	if not words:
+	plain = text.strip()
+	if not plain:
 		return ""
-	hashes = sorted(hashlib.sha256(w.encode()).hexdigest() for w in words)
+	padded = f"^{plain.lower()}$"
+	trigrams = {padded[i:i+3] for i in range(len(padded) - 2)}
+	if not trigrams:
+		return ""
+	hashes = sorted(hashlib.sha256(t.encode()).hexdigest() for t in trigrams)
 	return " ".join(hashes)
 
 
 def search_blind_index(
 	doctype: str, fieldname: str, search_text: str
 ) -> set[str]:
-	"""Search encrypted fields using blind index (exact word match).
+	"""Search encrypted fields using trigram blind index (substring match).
 
 	Returns a set of ``ref_docname`` values whose blind index contains
-	all words in ``search_text``.  Each word must match exactly — substring
-	and fuzzy matching are not supported (use ngram blind index for that).
+	all trigrams of ``search_text``.  Query must be at least 3 characters.
 	"""
-	words = re.findall(r"\w+", search_text.lower())
-	if not words:
+	search_text = search_text.lower()
+	if len(search_text) < 3:
 		return set()
 
-	query_hashes = [hashlib.sha256(w.encode()).hexdigest() for w in words]
+	query_trigrams = {search_text[i:i+3] for i in range(len(search_text) - 2)}
+	query_hashes = [hashlib.sha256(t.encode()).hexdigest() for t in query_trigrams]
 
 	EncryptionKey = frappe.qb.Table("tabEncryption Key")
 
@@ -128,6 +140,31 @@ def search_blind_index(
 		if r.blind_index and all(h in r.blind_index for h in query_hashes):
 			result.add(r.ref_docname)
 	return result
+
+
+def recompute_blind_index(doctype: str, fieldname: str) -> int:
+	"""Recompute blind_index for all existing Encryption Key rows of (doctype, fieldname).
+
+	Decrypts each ciphertext, re-runs ``compute_blind_index``, and updates the row.
+	Returns the number of rows updated.
+	"""
+	EncKey = frappe.qb.Table("tabEncryption Key")
+	rows = (
+		frappe.qb.from_(EncKey)
+		.select(EncKey.name, EncKey.ref_docname, EncKey.encrypted_dek, EncKey.ciphertext)
+		.where((EncKey.ref_doctype == doctype) & (EncKey.fieldname == fieldname))
+	).run(as_dict=True)
+
+	count = 0
+	for row in rows:
+		plaintext = decrypt_field_value(
+			row.encrypted_dek, row.ciphertext, doctype, row.ref_docname, fieldname
+		)
+		new_bi = compute_blind_index(plaintext)
+		frappe.db.set_value("Encryption Key", row.name, "blind_index", new_bi, update_modified=False)
+		count += 1
+
+	return count
 
 
 def get_encrypted_field_meta(doctype: str, meta=None) -> list:
@@ -214,60 +251,57 @@ def store_encrypted_fields(doc, meta=None) -> None:
 def decrypt_document(doc, meta=None) -> None:
 	"""Decrypt encrypted fields on a loaded document, respecting has_decrypt_permission."""
 	meta = meta or doc.meta
-	fields = get_encrypted_field_meta(doc.doctype, meta=meta)
-	if not fields:
-		return
 
 	if not doc.name:
 		return
 
-	# Check permission
-	if not doc.has_decrypt_permission(frappe.session.user):
-		for df in fields:
-			if is_encrypted_placeholder(doc.get(df.fieldname)):
-				doc.set(df.fieldname, None)
-		return
-
-	# Load all encrypted fields for this document in one query
-	EncryptionKey = frappe.qb.Table("tabEncryption Key")
-	rows = (
-		frappe.qb.from_(EncryptionKey)
-		.select(
-			EncryptionKey.fieldname,
-			EncryptionKey.encrypted_dek,
-			EncryptionKey.ciphertext,
-		)
-		.where(
-			(EncryptionKey.ref_doctype == doc.doctype)
-			& (EncryptionKey.ref_docname == doc.name)
-		)
-	).run(as_dict=True)
-
-	if not rows:
-		return
-
-	field_map = {r.fieldname: r for r in rows}
-	for df in fields:
-		if df.fieldname in field_map and is_encrypted_placeholder(doc.get(df.fieldname)):
-			try:
-				plaintext = decrypt_field_value(
-					field_map[df.fieldname].encrypted_dek,
-					field_map[df.fieldname].ciphertext,
-					doc.doctype, doc.name, df.fieldname,
+	# Decrypt parent encrypted fields
+	fields = get_encrypted_field_meta(doc.doctype, meta=meta)
+	if fields:
+		# Check permission — replace with None if denied
+		if not doc.has_decrypt_permission(frappe.session.user):
+			for df in fields:
+				if is_encrypted_placeholder(doc.get(df.fieldname)):
+					doc.set(df.fieldname, None)
+		else:
+			# Load all encrypted fields for this document in one query
+			EncryptionKey = frappe.qb.Table("tabEncryption Key")
+			rows = (
+				frappe.qb.from_(EncryptionKey)
+				.select(
+					EncryptionKey.fieldname,
+					EncryptionKey.encrypted_dek,
+					EncryptionKey.ciphertext,
 				)
-				if df.fieldtype == "JSON":
-					try:
-						plaintext = json.loads(plaintext)
-					except (ValueError, TypeError):
-						pass
-				doc.set(df.fieldname, plaintext)
-			except InvalidToken:
-				frappe.log_error(
-					_("Failed to decrypt {0} {1} {2}").format(doc.doctype, doc.name, df.fieldname),
-					_("Encryption Error"),
+				.where(
+					(EncryptionKey.ref_doctype == doc.doctype)
+					& (EncryptionKey.ref_docname == doc.name)
 				)
+			).run(as_dict=True)
 
-	# Decrypt child table encrypted fields
+			if rows:
+				field_map = {r.fieldname: r for r in rows}
+				for df in fields:
+					if df.fieldname in field_map and is_encrypted_placeholder(doc.get(df.fieldname)):
+						try:
+							plaintext = decrypt_field_value(
+								field_map[df.fieldname].encrypted_dek,
+								field_map[df.fieldname].ciphertext,
+								doc.doctype, doc.name, df.fieldname,
+							)
+							if df.fieldtype == "JSON":
+								try:
+									plaintext = json.loads(plaintext)
+								except (ValueError, TypeError):
+									pass
+							doc.set(df.fieldname, plaintext)
+						except InvalidToken:
+							frappe.log_error(
+								_("Failed to decrypt {0} {1} {2}").format(doc.doctype, doc.name, df.fieldname),
+								_("Encryption Error"),
+							)
+
+	# Decrypt child table encrypted fields (always runs even if parent has no encrypted fields)
 	for table_df in meta.get_table_fields():
 		child_doctype = table_df.options
 		child_encrypted_fields = get_encrypted_field_meta(child_doctype)

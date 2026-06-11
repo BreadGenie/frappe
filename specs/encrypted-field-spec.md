@@ -230,17 +230,71 @@ When Frappe delivers a webhook payload that includes encrypted fields, the field
 
 Default: send `<<encrypted>>`. Webhook config can opt into resolved values.
 
-## 9. Search
+## 9. Search — Blind Index
 
-Encrypted fields are **not** included in Frappe's global search (since they're ciphertext at rest). Search must happen at the application layer:
+Encrypted fields are **not** included in Frappe's global search (since they're ciphertext at rest). The framework provides a **blind index** mechanism that enables substring search over encrypted data without exposing plaintext.
 
-- Apps build their own search index from decrypted content.
-- The framework provides a `get_decrypted_value(doctype, docname, fieldname)` utility for index builders.
-- Alternatively: apps maintain a separate `tabSearch Index` table populated during `after_insert`/`on_update` (when plaintext is available).
+### 9.1 Trigram Blind Index Algorithm
 
-For Raven specifically (§R3 in Raven spec), a dedicated search index is built during message creation.
+A blind index is a set of one-way hashes that allow the database to answer "does this text contain substring X?" without knowing the text itself.
 
-## 10. Bench Commands
+**Storage side** (`compute_blind_index`):
+
+```python
+text = f"^{plaintext.lower()}$"         # pad with ^ and $ delimiters
+trigrams = {text[i:i+3] for i in range(len(text) - 2)}
+blind_index = " ".join(sorted(sha256(t) for t in trigrams))
+```
+
+- Text is lowercased for case-insensitive search.
+- Padding (`^` at start, `$` at end) ensures word-boundary trigrams are captured (e.g., `^he` for "hello").
+- Each overlapping 3-gram is hashed with SHA-256.
+- Hashes are sorted alphabetically so the string is independent of word order.
+
+**Search side** (`search_blind_index`):
+
+```python
+if len(search_text) < 3:
+    return set()                         # minimum 3 chars required
+query_trigrams = {search_text.lower()[i:i+3] for i in range(len(search_text) - 2)}
+query_hashes = [sha256(t) for t in query_trigrams]
+# Find rows where ALL query_hashes are present in the blind_index string
+```
+
+- Query is **not** padded — raw trigrams from the user's search text.
+- All query trigrams must be present for a match (logical AND).
+- Single-trigram queries (3 chars) are broad; precision increases with query length.
+- Queries shorter than 3 characters return empty results (caller should prompt for longer input).
+
+### 9.2 Properties
+
+| Property | Behavior |
+|---|---|
+| Substring match | ✅ Searching "ello" finds "hello world" |
+| Order-independent | ✅ Trigrams are matched as a set, not a sequence |
+| Case-insensitive | ✅ Both storage and search lowercase |
+| Minimum query | 3 characters (1 trigram) |
+| False positive rate | ~1 / 2^128 per trigram (negligible) |
+| Prefix/suffix match | ✅ `^`/`$` padding enables `^wor` and `rld$` matching |
+
+### 9.3 Bench command
+
+```bash
+bench recompute-blind-index <doctype> <fieldname>
+```
+
+Recomputes the `blind_index` column for all existing Encryption Key rows of the given doctype+fieldname. Use when upgrading the blind index algorithm (e.g. from word-level to trigram).
+
+### `bench rotate-encryption-key`
+
+- On-demand KEK rotation: generates a new KEK (or accepts `--new-key <base64>`), re-wraps all existing DEKs.
+- **Only DEKs are touched** — ciphertext is never decrypted/re-encrypted.
+- **Old-KEK fallback**: rotation stores the old KEK as `old_encryption_key` in `site_config.json` before updating the primary key. The decrypt path tries the new KEK first, falls back to old on failure. After rotation completes (all rows verified), the old key is removed from config.
+- **Crash recovery**: re-running is idempotent. Rows already re-wrapped under the new KEK are skipped (their DEK unwraps successfully with the new KEK). If rotation crashes mid-way, the old KEK is still available as fallback from `site_config.json`.
+- **Concurrent saves**: rotation checks the `modified` timestamp of each Encryption Key row before writing. If a concurrent save has updated the row since it was read, the row is skipped (the save already created a fresh DEK under the current KEK).
+- Flags: `--new-key <value>` (externally-provided KEK, paves road for KMS integration), `--batch-size <n>` (rows per batch, default 1000).
+
+## 11. Bench Commands
 
 ### `bench encrypt-field <doctype> <fieldname>`
 
@@ -253,20 +307,20 @@ For Raven specifically (§R3 in Raven spec), a dedicated search index is built d
 - Reverse operation — batch-decrypts and restores plaintext to main table.
 - Removes entries from `tabEncryption Keys`.
 
-## 11. Backward Compatibility
+## 12. Backward Compatibility
 
 - Existing DocTypes without `encrypted` fields are unaffected.
 - Removing `encrypted: true` from a field does NOT auto-decrypt. Run `bench decrypt-field` to restore.
 - Changing a field to `encrypted: true` when data exists: lazy migration on first read, plus `bench encrypt-field` for proactive batch.
 
-## 12. Audit Logging
+## 13. Audit Logging
 
 The framework emits a `frappe.log_error` or a structured audit log when:
 - An encrypted field is accessed for decryption (user, doctype, docname, fieldname, timestamp).
 - A batch encrypt/decrypt command runs.
 - A decryption permission check fails (optional, configurable).
 
-## 13. Security Considerations
+## 14. Security Considerations
 
 | Aspect | Decision |
 |---|---|
@@ -277,10 +331,8 @@ The framework emits a `frappe.log_error` or a structured audit log when:
 | Replay attacks | AAD binds ciphertext to doctype+docname+fieldname. |
 | Backup | Encrypted backups (`encrypt_backup`) + at-rest encryption are independent layers. Backups contain encrypted data only. |
 
-## 14. Future Scope (v2)
+## 15. Future Scope (v2)
 
-- Key rotation command.
 - External KMS provider (AWS KMS, HashiCorp Vault).
-- Encrypted child table fields.
 - `bench verify-encryption` — validates all wrapped DEKs can be unwrapped.
 - Decryption performance metrics (cache hot DEKs).
