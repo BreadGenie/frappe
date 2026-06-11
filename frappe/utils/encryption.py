@@ -34,12 +34,24 @@ def encrypt_field_value(plaintext: str, doctype: str, docname: str, fieldname: s
 
 
 def decrypt_field_value(wrapped_dek: str, ciphertext: str, doctype: str, docname: str, fieldname: str) -> str:
-	"""Decrypt a field value using the wrapped DEK."""
+	"""Decrypt a field value using the wrapped DEK.
+
+	Tries the primary KEK first. Falls back to ``old_encryption_key``
+	from site config (set during key rotation) if the primary KEK fails.
+	"""
 	from cryptography.fernet import Fernet as FernetCipher
 
+	def _unwrap(encrypted_dek: str, key: str) -> bytes:
+		return FernetCipher(encode(key)).decrypt(encode(encrypted_dek))
+
 	kek = _get_kek()
-	kek_suite = FernetCipher(encode(kek))
-	dek = kek_suite.decrypt(encode(wrapped_dek))
+	try:
+		dek = _unwrap(wrapped_dek, kek)
+	except InvalidToken:
+		old_kek = frappe.local.conf.get("old_encryption_key")
+		if not old_kek:
+			raise
+		dek = _unwrap(wrapped_dek, old_kek)
 
 	cipher_suite = FernetCipher(dek)
 	aad = _build_aad(doctype, docname, fieldname)

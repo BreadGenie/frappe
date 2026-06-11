@@ -1,7 +1,9 @@
 import hashlib
+import unittest
 
 import frappe
 from frappe.tests import IntegrationTestCase, UnitTestCase
+from frappe.utils import encode
 
 
 class TestEncryptionUtils(UnitTestCase):
@@ -458,3 +460,151 @@ class TestRestoreEncryptedPlaceholders(IntegrationTestCase):
 		child_data = [d for d in data.get("defaults", []) if d.get("defkey") == "test_encryption_key"]
 		self.assertGreater(len(child_data), 0)
 		self.assertTrue(is_encrypted_placeholder(child_data[0].get("defvalue")))
+
+
+class TestKeyRotation(IntegrationTestCase):
+	"""Tests for KEK rotation and old-KEK fallback."""
+
+	TEST_DOCTYPE = "ToDo"
+	ENCRYPTED_FIELD = "description"
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		# Enable encryption on ToDo.description
+		docfield = frappe.db.get_value(
+			"DocField",
+			{"parent": cls.TEST_DOCTYPE, "fieldname": cls.ENCRYPTED_FIELD},
+			["name", "fieldtype"],
+			as_dict=True,
+		)
+		if not docfield:
+			raise unittest.SkipTest(f"Field {cls.ENCRYPTED_FIELD} not found on {cls.TEST_DOCTYPE}")
+
+		cls._docfield_name = docfield.name
+		cls._docfield_type = docfield.fieldtype
+		frappe.db.set_value("DocField", cls._docfield_name, "encrypted", 1)
+		frappe.cache.delete_value("doctype_meta")
+		frappe.clear_cache(doctype=cls.TEST_DOCTYPE)
+
+	@classmethod
+	def tearDownClass(cls):
+		frappe.db.set_value("DocField", cls._docfield_name, "encrypted", 0)
+		frappe.cache.delete_value("doctype_meta")
+		frappe.clear_cache(doctype=cls.TEST_DOCTYPE)
+		super().tearDownClass()
+
+	def setUp(self):
+		super().setUp()
+		# Create encrypted test doc
+		self._test_data = frappe.get_doc(
+			{
+				"doctype": self.TEST_DOCTYPE,
+				"description": "secret rotation test data",
+				"allocated_to": frappe.session.user,
+			}
+		).insert()
+
+		# Save the original KEK so we can restore
+		self._original_kek = frappe.local.conf.get("encryption_key")
+		self._original_old_kek = frappe.local.conf.get("old_encryption_key")
+
+	def tearDown(self):
+		# Restore KEKs
+		if self._original_kek:
+			frappe.local.conf.encryption_key = self._original_kek
+		else:
+			frappe.local.conf.pop("encryption_key", None)
+		frappe.local.conf.pop("old_encryption_key", None)
+
+		# Also clean up from site_config
+		from frappe.installer import update_site_config
+
+		if self._original_kek:
+			update_site_config("encryption_key", self._original_kek)
+		update_site_config("old_encryption_key", "None")
+		frappe.local.conf.pop("old_encryption_key", None)
+
+		frappe.delete_doc(self.TEST_DOCTYPE, self._test_data.name, force=True)
+		super().tearDown()
+
+	def test_old_kek_fallback_decrypt(self):
+		"""Decrypt succeeds with old KEK when primary KEK is wrong."""
+		from frappe.utils.encryption import decrypt_field_value
+
+		EncryptionKey = frappe.qb.Table("tabEncryption Key")
+		row = (
+			frappe.qb.from_(EncryptionKey)
+			.select(EncryptionKey.encrypted_dek, EncryptionKey.ciphertext)
+			.where(
+				(EncryptionKey.ref_doctype == self.TEST_DOCTYPE)
+				& (EncryptionKey.ref_docname == self._test_data.name)
+				& (EncryptionKey.fieldname == self.ENCRYPTED_FIELD)
+			)
+		).run(as_dict=True)
+		self.assertEqual(len(row), 1)
+
+		original_kek = frappe.local.conf.encryption_key
+
+		# Set a new KEK as primary — this won't match the stored DEK
+		from cryptography.fernet import Fernet
+
+		new_kek = Fernet.generate_key().decode()
+		frappe.local.conf.encryption_key = new_kek
+
+		# Set the original KEK as old_encryption_key — fallback should kick in
+		frappe.local.conf.old_encryption_key = original_kek
+
+		try:
+			plaintext = decrypt_field_value(
+				row[0].encrypted_dek, row[0].ciphertext,
+				self.TEST_DOCTYPE, self._test_data.name, self.ENCRYPTED_FIELD,
+			)
+			self.assertEqual(plaintext, "secret rotation test data")
+		finally:
+			frappe.local.conf.encryption_key = original_kek
+			frappe.local.conf.pop("old_encryption_key", None)
+
+	def test_rotation_rewrap_roundtrip(self):
+		"""Manually re-wrap a DEK with a new KEK and verify decrypt still works."""
+		from frappe.utils.encryption import decrypt_field_value
+
+		EncryptionKey = frappe.qb.Table("tabEncryption Key")
+		row = (
+			frappe.qb.from_(EncryptionKey)
+			.select(EncryptionKey.name, EncryptionKey.encrypted_dek, EncryptionKey.ciphertext)
+			.where(
+				(EncryptionKey.ref_doctype == self.TEST_DOCTYPE)
+				& (EncryptionKey.ref_docname == self._test_data.name)
+				& (EncryptionKey.fieldname == self.ENCRYPTED_FIELD)
+			)
+		).run(as_dict=True)
+		self.assertEqual(len(row), 1)
+
+		original_kek = frappe.local.conf.encryption_key
+
+		# Unwrap DEK with original KEK
+		from cryptography.fernet import Fernet
+
+		dek = Fernet(encode(original_kek)).decrypt(encode(row[0].encrypted_dek), ttl=None)
+
+		# Generate new KEK and re-wrap DEK
+		new_kek = Fernet.generate_key().decode()
+		new_wrapped_dek = Fernet(encode(new_kek)).encrypt(dek).decode()
+
+		# Update the row in DB with new wrapped DEK
+		frappe.db.set_value("Encryption Key", row[0].name, "encrypted_dek", new_wrapped_dek, update_modified=False)
+
+		# Switch to new KEK
+		old_old_kek = frappe.local.conf.encryption_key
+		frappe.local.conf.encryption_key = new_kek
+
+		try:
+			# Decrypt should work with new KEK (no old_encryption_key fallback needed)
+			plaintext = decrypt_field_value(
+				new_wrapped_dek, row[0].ciphertext,
+				self.TEST_DOCTYPE, self._test_data.name, self.ENCRYPTED_FIELD,
+			)
+			self.assertEqual(plaintext, "secret rotation test data")
+		finally:
+			frappe.local.conf.encryption_key = old_old_kek

@@ -11,7 +11,7 @@ from frappe import _
 from frappe.commands import get_site, pass_context
 from frappe.coverage import CodeCoverage
 from frappe.exceptions import SiteNotSpecifiedError
-from frappe.utils import cint, update_progress_bar
+from frappe.utils import cint, cstr, update_progress_bar
 from frappe.utils.bench_helper import CliCtxObj
 
 EXTRA_ARGS_CTX = {"ignore_unknown_options": True, "allow_extra_args": True}
@@ -1059,6 +1059,128 @@ def recompute_blind_index(context, doctype, fieldname):
 	click.echo(f"Recomputed blind_index for {count} Encryption Key rows ({doctype}.{fieldname}).")
 
 
+@click.command("rotate-encryption-key")
+@click.option("--new-key", default=None, help="Base64-encoded 32-byte Fernet key (auto-generated if omitted)")
+@click.option("--batch-size", default=1000, type=int, help="Rows per batch (default 1000)")
+@pass_context
+def rotate_encryption_key(context, new_key, batch_size):
+	"""Rotate the Key Encryption Key (KEK) by re-wrapping all DEKs.
+
+	Generates a new KEK (or accepts --new-key), re-wraps every wrapped DEK
+	in tabEncryption Key, and updates site_config.json.
+
+	The old KEK is preserved as old_encryption_key in site_config during
+	rotation so decryption falls back to it until all rows are migrated.
+	"""
+	from cryptography.fernet import Fernet, InvalidToken
+
+	from frappe.installer import update_site_config
+	from frappe.utils.encryption import _get_kek
+
+	site = get_site(context)
+	frappe.init(site)
+	frappe.connect()
+
+	# Determine source and target KEKs
+	source_kek = frappe.local.conf.get("old_encryption_key")
+	current_kek = _get_kek()
+
+	if source_kek:
+		click.echo("Recovering from previous interrupted rotation...")
+		target_kek = current_kek
+		if new_key:
+			_validate_fernet_key(new_key)
+			target_kek = new_key
+	else:
+		source_kek = current_kek
+		target_kek = _validate_fernet_key(new_key) if new_key else Fernet.generate_key().decode()
+
+		if target_kek == source_kek:
+			click.echo("New key is identical to current key. Nothing to do.")
+			return
+
+		click.echo("Saving old KEK as fallback...")
+		update_site_config("old_encryption_key", source_kek)
+		frappe.local.conf.old_encryption_key = source_kek
+
+	# Switch site to target KEK
+	if current_kek != target_kek:
+		click.echo("Updating primary encryption key...")
+		update_site_config("encryption_key", target_kek)
+		frappe.local.conf.encryption_key = target_kek
+
+	# Process rows
+	total = frappe.db.count("Encryption Key")
+	click.echo(f"Processing {total} Encryption Key rows...")
+
+	rows = frappe.db.sql(
+		"""SELECT name, encrypted_dek, modified FROM `tabEncryption Key` ORDER BY modified""",
+		as_dict=True,
+	)
+
+	processed = 0
+	skipped = 0
+
+	for i, row in enumerate(rows):
+		# Skip if already wrapped with target KEK (crash recovery)
+		try:
+			Fernet(encode(target_kek)).decrypt(encode(row.encrypted_dek), ttl=None)
+			skipped += 1
+			update_progress_bar("Rotating", i + 1, total)
+			continue
+		except InvalidToken:
+			pass
+
+		# Unwrap with source KEK
+		try:
+			dek = Fernet(encode(source_kek)).decrypt(encode(row.encrypted_dek), ttl=None)
+		except InvalidToken:
+			click.echo(f"\nWarning: row {row.name} matches neither KEK. Skipping.")
+			skipped += 1
+			update_progress_bar("Rotating", i + 1, total)
+			continue
+
+		# Re-wrap with target KEK
+		new_wrapped = cstr(Fernet(encode(target_kek)).encrypt(dek))
+
+		# Conditional update — skip if a concurrent save modified this row
+		frappe.db.sql(
+			"""UPDATE `tabEncryption Key`
+			SET encrypted_dek = %s
+			WHERE name = %s AND modified = %s""",
+			(new_wrapped, row.name, row.modified),
+		)
+
+		processed += 1
+
+		if (i + 1) % batch_size == 0:
+			frappe.db.commit()
+
+		update_progress_bar("Rotating", i + 1, total)
+
+	# Clean up old KEK
+	click.echo(f"\nDone. {processed} rows re-wrapped, {skipped} skipped.")
+	click.echo("Cleaning up old KEK...")
+	update_site_config("old_encryption_key", "None")
+	frappe.local.conf.pop("old_encryption_key", None)
+
+	frappe.db.commit()
+	frappe.destroy()
+
+
+def _validate_fernet_key(key: str) -> str:
+	"""Validate that a string is a valid Fernet key."""
+	from cryptography.fernet import Fernet
+
+	try:
+		Fernet(encode(key))
+	except (ValueError, TypeError):
+		raise click.BadParameter(
+			"Invalid Fernet key. Must be 32-byte url-safe base64 encoded."
+		)
+	return key
+
+
 @click.command("decrypt-field")
 @click.argument("doctype")
 @click.argument("fieldname")
@@ -1110,6 +1232,7 @@ commands = [
 	encrypt_field,
 	decrypt_field,
 	recompute_blind_index,
+	rotate_encryption_key,
 	build,
 	clear_cache,
 	clear_website_cache,
