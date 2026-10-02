@@ -3,12 +3,20 @@ name: Server
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      runner:
+        type: choice
+        options:
+          - ubuntu-latest
+          - runway-frappe
+        default: ubuntu-latest
+        required: true
   schedule:
     # Run everday at midnight UTC / 5:30 IST
     - cron: "0 0 * * *"
 
 concurrency:
-  group: server-${{ github.event_name }}-${{ github.event.number }}
+  group: server-${{ github.event_name }}-${{ github.event.number }}-${{ inputs.runner }}
   cancel-in-progress: true
 
 permissions:
@@ -39,7 +47,7 @@ jobs:
     name: Integration
     needs: checkrun
     if: ${{ needs.checkrun.outputs.build == 'strawberry' }}
-    runs-on: runway-frappe
+    runs-on: "${{ inputs.runner || 'ubuntu-latest' }}"
     timeout-minutes: 30
     env:
       NODE_ENV: "production"
