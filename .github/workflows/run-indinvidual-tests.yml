@@ -1,138 +1,177 @@
 name: Individual
 
+# Manually dispatchable smoke run: install the upstream `frappe` package from a
+# pinned revision and execute exactly ONE genuine, unmodified upstream unittest
+# case that needs no database, no site, no bench and no node/asset build.
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: server-individual-tests-develop-${{ github.event_name }}-${{ github.event.number || github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+  group: individual-tests-runway-frappe-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Single upstream test to execute. Pure YAML/template utility check:
+  # stdlib unittest.TestCase, no DB, no frappe.init(), no local site config.
+  FRAPPE_TEST_ID: "frappe.tests.test_boilerplate.TestBoilerPlate.test_valid_ci_yaml"
+  PYTHONDONTWRITEBYTECODE: "1"
+  UV_NO_PROGRESS: "1"
+
 jobs:
-  discover:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-    - name: Clone
-      uses: actions/checkout@v6
-    - id: set-matrix
-      run: |
-        # Use grep and find to get the list of test files
-        matrix=$(find . -path '*/doctype/*/test_*.py' | xargs grep -l 'def test_' | awk '{
-            # Remove ./ prefix, file extension, and replace / with .
-            gsub(/^\.\//, "", $0)
-            gsub(/\.py$/, "", $0)
-            gsub(/\//, ".", $0)
-            # Add to array
-            tests[NR] = $0
-        }
-        END {
-            # Start JSON array
-            printf "{\n  \"include\": [\n"
-            # Loop through array and create JSON objects
-            for (i=1; i<=NR; i++) {
-                printf "    {\"test\": \"%s\"}", tests[i]
-                if (i < NR) printf ","
-                printf "\n"
-            }
-            # Close JSON array
-            printf "  ]\n}"
-        }')
-
-        # Output the matrix
-        echo "matrix=$(echo "$matrix" | jq -c)" >> $GITHUB_OUTPUT
-
-        # For debugging (optional)
-        echo "Generated matrix:"
-        echo "$matrix"
-  test:
-    needs: discover
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      NODE_ENV: "production"
-
-    strategy:
-      fail-fast: false
-      matrix: ${{fromJson(needs.discover.outputs.matrix)}}
-
-    name: Test
-
-    services:
-      mysql:
-        image: mariadb:11.8
-        env:
-          MARIADB_ROOT_PASSWORD: db_root
-        ports:
-          - 3306:3306
-        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=2s --health-retries=3 --tmpfs=/var/lib/mysql:rw,noexec,nosuid,size=2g
+  run-one-frappe-test:
+    name: Run Frappe CI-template unit test
+    runs-on: runway-frappe
+    timeout-minutes: 20
 
     steps:
-      - name: Clone
+      - name: Checkout pinned revision
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Setup Python
+      - name: Preflight - machine, sudo, disk (before)
+        run: |
+          set -uo pipefail
+          echo "UTC start:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "UTC epoch:  $(date +%s)"
+          echo "repo:       $GITHUB_REPOSITORY"
+          echo "ref:        $GITHUB_REF"
+          echo "sha:        $GITHUB_SHA"
+          echo "runner:     ${{ runner.os }} / ${{ runner.name }} / ${{ runner.arch }}"
+          echo "workspace:  $GITHUB_WORKSPACE"
+          echo "--- uname ---"
+          uname -a
+          echo "--- id ---"
+          id
+          echo "--- sudo ---"
+          if sudo -n true 2>/dev/null; then echo "passwordless sudo: OK"; else echo "passwordless sudo: MISSING"; fi
+          echo "--- cpu / mem ---"
+          nproc
+          free -h
+          echo "--- git ---"
+          git --version
+          echo "--- df -h (BEFORE) ---"
+          df -h
+          {
+            echo "T_START=$(date +%s)"
+            echo "SYSTEM_PY=$(command -v python3 2>/dev/null || echo none)"
+            echo "DISK_BEFORE=$(df -h --output=source,size,used,avail,pcent / | tail -1 | tr -s ' ')"
+            echo "MACHINE_SUMMARY=$(nproc) cpu / $(free -h | awk '/^Mem:/{print $2}') RAM / $(uname -sr)"
+          } >> "$GITHUB_ENV"
+
+      - name: Install system build dependencies (apt)
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -qq
+          # git: uv must clone the two git+https deps (pypika, frappe/gunicorn).
+          # build-essential/pkg-config/libmariadb-dev: build mysqlclient.
+          # (libcups2-dev intentionally omitted: no node build, no printing.)
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libmariadb-dev git
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          echo "T_APT=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Setup Python 3.14
         uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: "3.14"
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup uv (caching disabled)
+        uses: astral-sh/setup-uv@v6
         with:
-          node-version: 24
-          check-latest: true
+          enable-cache: false
 
-      - name: Add to Hosts
-        run: echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-            ${{ runner.os }}-
-
-      - name: Cache node modules
-        uses: actions/cache@v4
-        env:
-          cache-name: cache-node-modules
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}-
-            ${{ runner.os }}-build-
-            ${{ runner.os }}-
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
-
-      - uses: actions/cache@v4
-        id: yarn-cache
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Install Dependencies
+      - name: Create virtualenv
         run: |
-          bash ${GITHUB_WORKSPACE}/.github/helper/install_dependencies.sh
+          set -euo pipefail
+          echo "python -VV: $(python -VV)"
+          echo "uv --version: $(uv --version)"
+          uv venv --no-project --python "$(python -c 'import sys; print(sys.executable)')" "$RUNNER_TEMP/frappe-venv"
+          echo "VENV_PY=$RUNNER_TEMP/frappe-venv/bin/python" >> "$GITHUB_ENV"
+          echo "PY_SUMMARY_PY=$("$RUNNER_TEMP/frappe-venv/bin/python" -VV | head -1)" >> "$GITHUB_ENV"
+          echo "T_VENV=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Init Bench
+      - name: Install frappe package (editable, no test extras needed)
         run: |
-          bash ${GITHUB_WORKSPACE}/.github/helper/install_bench.sh
-        env:
-          TYPE: server
-      - name: Init Test Site
-        run: |
-          bash ${GITHUB_WORKSPACE}/.github/helper/install_site.sh
-        env:
-          TYPE: server
-          DB: mariadb
+          set -euo pipefail
+          # Only the core [project.dependencies] are required: this test module
+          # imports click / GitPython / PyYAML / requests, all core deps.
+          UV_CACHE_DIR="$RUNNER_TEMP/uv-cache" uv pip install --python "$VENV_PY" --no-cache -e .
+          "$VENV_PY" -c "import frappe; print('frappe', frappe.__version__, '->', frappe.__file__)"
+          echo "T_INSTALL=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Run Tests
-        run: 'cd ~/frappe-bench/ && bench --site test_site run-tests --app frappe --module ${{ matrix.test }}'
+      - name: Run the selected upstream test
+        run: |
+          set -uo pipefail
+          cd "$GITHUB_WORKSPACE"
+          echo "cwd: $PWD"
+          echo "python: $($VENV_PY -VV)"
+          echo "+ $VENV_PY -m unittest -v $FRAPPE_TEST_ID"
+          t0=$(date +%s)
+          "$VENV_PY" -m unittest -v "$FRAPPE_TEST_ID" 2>&1 | tee "$RUNNER_TEMP/test-output.log"
+          rc=${PIPESTATUS[0]}
+          t1=$(date +%s)
+          {
+            echo "TEST_RC=$rc"
+            echo "T_TEST_END=$t1"
+            echo "TEST_SECS=$((t1 - t0))"
+          } >> "$GITHUB_ENV"
+          echo "test exit code: $rc (took $((t1 - t0))s)"
+          exit "$rc"
+
+      - name: Postflight - disk (after) and step summary
+        if: always()
+        run: |
+          set -uo pipefail
+          echo "UTC end:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "UTC epoch:  $(date +%s)"
+          echo "--- df -h (AFTER) ---"
+          df -h
+          # Local variable only: $GITHUB_ENV is not re-read within the same step.
+          DISK_AFTER=$(df -h --output=source,size,used,avail,pcent / | tail -1 | tr -s ' ')
+
+          el() { echo $(( ${2:-0} - ${1:-0} )); }
+          T_NOW=$(date +%s)
+          {
+            echo "## Individual: $FRAPPE_TEST_ID"
+            echo
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| selected test | \`$FRAPPE_TEST_ID\` |"
+            echo "| test result | exit \`${TEST_RC:-n/a}\` (${TEST_SECS:-n/a}s) |"
+            echo "| repo | $GITHUB_REPOSITORY |"
+            echo "| ref | $GITHUB_REF |"
+            echo "| tested commit | \`$GITHUB_SHA\` |"
+            echo "| runner | ${{ runner.name }} (${{ runner.os }}-${{ runner.arch }}) |"
+            echo "| machine | ${MACHINE_SUMMARY:-unknown} |"
+            echo "| test python | ${PY_SUMMARY_PY:-unknown} |"
+            echo "| runner system python3 | ${SYSTEM_PY:-unknown} |"
+            echo "| disk before | \`${DISK_BEFORE:-unknown}\` |"
+            echo "| disk after | \`${DISK_AFTER:-unknown}\` |"
+            echo
+            echo "### Durations (seconds)"
+            echo
+            echo "| phase | secs |"
+            echo "| --- | --- |"
+            echo "| apt | $(el "${T_START:-0}" "${T_APT:-0}") |"
+            echo "| venv | $(el "${T_APT:-0}" "${T_VENV:-0}") |"
+            echo "| install frappe | $(el "${T_VENV:-0}" "${T_INSTALL:-0}") |"
+            echo "| test | ${TEST_SECS:-n/a} |"
+            echo "| total | $(el "${T_START:-0}" "$T_NOW") |"
+            echo
+            echo "### Test output"
+            echo
+            echo '```'
+            tail -n 30 "$RUNNER_TEMP/test-output.log" 2>/dev/null || echo "(no output captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
