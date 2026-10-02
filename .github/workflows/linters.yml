@@ -73,7 +73,7 @@ jobs:
 
   deps-vulnerable-check:
     name: 'Vulnerable Dependency Check'
-    runs-on: ubuntu-latest
+    runs-on: runway-frappe
 
     steps:
       - uses: actions/setup-python@v6
