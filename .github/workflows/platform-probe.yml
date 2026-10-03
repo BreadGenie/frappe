@@ -15,266 +15,266 @@ jobs:
       - name: Platform probe
         run: |
           cat > /tmp/platform-probe.py <<'RUNWAY_PROBE_EOF'
-#!/usr/bin/env python3
-"""Per-operation latency probe for CI runner platforms.
+          #!/usr/bin/env python3
+          """Per-operation latency probe for CI runner platforms.
 
-Answers the questions that decide whether a self-hosted runner's test phase is
-slower because of the machine or because of the interpreter build: interpreter
-build flags, clock/timer cost, bytecode dispatch, allocation, and per-request
-network latency for both loopback and a published container port.
+          Answers the questions that decide whether a self-hosted runner's test phase is
+          slower because of the machine or because of the interpreter build: interpreter
+          build flags, clock/timer cost, bytecode dispatch, allocation, and per-request
+          network latency for both loopback and a published container port.
 
-Standard library only. Read-only apart from a scratch socket port. Prints one
-JSON object per measurement, three repetitions each, reporting the median.
-"""
+          Standard library only. Read-only apart from a scratch socket port. Prints one
+          JSON object per measurement, three repetitions each, reporting the median.
+          """
 
-from __future__ import annotations
+          from __future__ import annotations
 
-import json
-import os
-import platform
-import socket
-import statistics
-import subprocess
-import sys
-import sysconfig
-import threading
-import time
+          import json
+          import os
+          import platform
+          import socket
+          import statistics
+          import subprocess
+          import sys
+          import sysconfig
+          import threading
+          import time
 
-REPS = 3
-
-
-def emit(name, **kw):
-    print(json.dumps(dict(measurement=name, **kw)), flush=True)
+          REPS = 3
 
 
-def median_of(fn, reps=REPS):
-    samples = []
-    for _ in range(reps):
-        start = time.perf_counter()
-        fn()
-        samples.append(time.perf_counter() - start)
-    return statistics.median(samples)
+          def emit(name, **kw):
+              print(json.dumps(dict(measurement=name, **kw)), flush=True)
 
 
-# --------------------------------------------------------------------------
-# Platform and build identity
-# --------------------------------------------------------------------------
-
-def report_identity():
-    keys = (
-        "USE_COMPUTED_GOTOS", "HAVE_COMPUTED_GOTOS", "Py_GIL_DISABLED",
-        "CONFIG_ARGS", "Py_DEBUG", "WITH_PYMALLOC",
-    )
-    config = {k: sysconfig.get_config_var(k) for k in keys}
-    jit = None
-    try:
-        import sys as _s
-        if hasattr(_s, "_jit"):
-            jit = dict(available=_s._jit.is_available(),
-                       enabled=_s._jit.is_enabled())
-    except Exception as exc:                      # pragma: no cover
-        jit = {"error": type(exc).__name__}
-    emit("identity",
-         python=sys.version.split()[0],
-         python_full=sys.version.replace("\n", " "),
-         executable=sys.executable,
-         platform=platform.platform(),
-         machine=platform.machine(),
-         nproc=os.cpu_count(),
-         computed_gotos=config["USE_COMPUTED_GOTOS"],
-         config_args=str(config["CONFIG_ARGS"]).split(),
-         jit=jit,
-         python_jit_env=os.environ.get("PYTHON_JIT"))
+          def median_of(fn, reps=REPS):
+              samples = []
+              for _ in range(reps):
+                  start = time.perf_counter()
+                  fn()
+                  samples.append(time.perf_counter() - start)
+              return statistics.median(samples)
 
 
-def report_clocksource():
-    base = "/sys/devices/system/clocksource/clocksource0"
-    current = available = None
-    try:
-        current = open(f"{base}/current_clocksource").read().strip()
-        available = open(f"{base}/available_clocksource").read().split()
-    except OSError as exc:
-        emit("clocksource", error=type(exc).__name__)
-        return
-    emit("clocksource", current=current, available=available)
+          # --------------------------------------------------------------------------
+          # Platform and build identity
+          # --------------------------------------------------------------------------
+
+          def report_identity():
+              keys = (
+                  "USE_COMPUTED_GOTOS", "HAVE_COMPUTED_GOTOS", "Py_GIL_DISABLED",
+                  "CONFIG_ARGS", "Py_DEBUG", "WITH_PYMALLOC",
+              )
+              config = {k: sysconfig.get_config_var(k) for k in keys}
+              jit = None
+              try:
+                  import sys as _s
+                  if hasattr(_s, "_jit"):
+                      jit = dict(available=_s._jit.is_available(),
+                                 enabled=_s._jit.is_enabled())
+              except Exception as exc:                      # pragma: no cover
+                  jit = {"error": type(exc).__name__}
+              emit("identity",
+                   python=sys.version.split()[0],
+                   python_full=sys.version.replace("\n", " "),
+                   executable=sys.executable,
+                   platform=platform.platform(),
+                   machine=platform.machine(),
+                   nproc=os.cpu_count(),
+                   computed_gotos=config["USE_COMPUTED_GOTOS"],
+                   config_args=str(config["CONFIG_ARGS"]).split(),
+                   jit=jit,
+                   python_jit_env=os.environ.get("PYTHON_JIT"))
 
 
-# --------------------------------------------------------------------------
-# Clock and timer cost
-# --------------------------------------------------------------------------
-
-def report_clock_cost():
-    """Cost of one clock read, which is what a timestamped test pays per call.
-
-    Frappe's result printer, its database writes and its retry loops all read
-    the clock. Measured in Python because that is the layer the workload uses;
-    CPython reaches clock_gettime through the vDSO, so a guest whose vDSO
-    cannot serve the clock pays a full syscall per read here.
-    """
-    for name in ("monotonic", "perf_counter", "time"):
-        fn = getattr(time, name)
-        n = 200000
-        best = None
-        for _ in range(REPS):
-            start = time.perf_counter()
-            for _ in range(n):
-                fn()
-            elapsed = time.perf_counter() - start
-            best = elapsed if best is None else min(best, elapsed)
-        emit(f"clock_cost_{name}", ns_per_call=round(best / n * 1e9, 1),
-             calls=n)
-
-    for requested in (0.001, 0.010):
-        overshoots = []
-        for _ in range(40):
-            start = time.perf_counter()
-            time.sleep(requested)
-            overshoots.append((time.perf_counter() - start - requested) * 1e6)
-        overshoots.sort()
-        emit(f"sleep_overshoot_{int(requested * 1000)}ms",
-             median_us=round(statistics.median(overshoots), 1),
-             p95_us=round(overshoots[int(0.95 * (len(overshoots) - 1))], 1),
-             requested_us=round(requested * 1e6, 1))
+          def report_clocksource():
+              base = "/sys/devices/system/clocksource/clocksource0"
+              current = available = None
+              try:
+                  current = open(f"{base}/current_clocksource").read().strip()
+                  available = open(f"{base}/available_clocksource").read().split()
+              except OSError as exc:
+                  emit("clocksource", error=type(exc).__name__)
+                  return
+              emit("clocksource", current=current, available=available)
 
 
-# --------------------------------------------------------------------------
-# Interpreter work
-# --------------------------------------------------------------------------
+          # --------------------------------------------------------------------------
+          # Clock and timer cost
+          # --------------------------------------------------------------------------
 
-def _dispatch(n):
-    total = 0
-    for i in range(n):
-        total = total + (i ^ 0x5A) & 0xFF
-    return total
+          def report_clock_cost():
+              """Cost of one clock read, which is what a timestamped test pays per call.
 
+              Frappe's result printer, its database writes and its retry loops all read
+              the clock. Measured in Python because that is the layer the workload uses;
+              CPython reaches clock_gettime through the vDSO, so a guest whose vDSO
+              cannot serve the clock pays a full syscall per read here.
+              """
+              for name in ("monotonic", "perf_counter", "time"):
+                  fn = getattr(time, name)
+                  n = 200000
+                  best = None
+                  for _ in range(REPS):
+                      start = time.perf_counter()
+                      for _ in range(n):
+                          fn()
+                      elapsed = time.perf_counter() - start
+                      best = elapsed if best is None else min(best, elapsed)
+                  emit(f"clock_cost_{name}", ns_per_call=round(best / n * 1e9, 1),
+                       calls=n)
 
-def _allocate(n):
-    sink = None
-    for i in range(n):
-        sink = {"k": i, "v": [i, i + 1, i + 2], "s": f"{i:04d}"}
-    return sink
-
-
-def report_interpreter():
-    n = 2_000_000
-    emit("interpreter_dispatch",
-         ns_per_iter=round(median_of(lambda: _dispatch(n)) / n * 1e9, 2),
-         iters=n)
-    m = 400_000
-    emit("interpreter_allocate",
-         ns_per_iter=round(median_of(lambda: _allocate(m)) / m * 1e9, 2),
-         iters=m)
-
-
-# --------------------------------------------------------------------------
-# Per-request network latency
-# --------------------------------------------------------------------------
-
-def _echo_server(sock):
-    while True:
-        try:
-            conn, _ = sock.accept()
-        except OSError:
-            return
-        with conn:
-            try:
-                while conn.recv(4096):
-                    conn.sendall(b"x")
-            except OSError:
-                pass
+              for requested in (0.001, 0.010):
+                  overshoots = []
+                  for _ in range(40):
+                      start = time.perf_counter()
+                      time.sleep(requested)
+                      overshoots.append((time.perf_counter() - start - requested) * 1e6)
+                  overshoots.sort()
+                  emit(f"sleep_overshoot_{int(requested * 1000)}ms",
+                       median_us=round(statistics.median(overshoots), 1),
+                       p95_us=round(overshoots[int(0.95 * (len(overshoots) - 1))], 1),
+                       requested_us=round(requested * 1e6, 1))
 
 
-def _rtt(host, port, rounds=2000):
-    samples = []
-    with socket.create_connection((host, port), timeout=5) as sock:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        for _ in range(rounds):
-            start = time.perf_counter()
-            sock.sendall(b"ping")
-            sock.recv(4096)
-            samples.append((time.perf_counter() - start) * 1e6)
-    samples.sort()
-    return samples
+          # --------------------------------------------------------------------------
+          # Interpreter work
+          # --------------------------------------------------------------------------
+
+          def _dispatch(n):
+              total = 0
+              for i in range(n):
+                  total = total + (i ^ 0x5A) & 0xFF
+              return total
 
 
-def report_network():
-    listener = socket.socket()
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(8)
-    port = listener.getsockname()[1]
-    threading.Thread(target=_echo_server, args=(listener,),
-                     daemon=True).start()
-    try:
-        s = _rtt("127.0.0.1", port)
-        emit("rtt_loopback",
-             median_us=round(statistics.median(s), 2),
-             p95_us=round(s[int(0.95 * (len(s) - 1))], 2),
-             rounds=len(s))
-    finally:
-        listener.close()
-
-    # The real workflow's database is a container published on the loopback
-    # port, so a round-trip through docker's published port is the closest
-    # available analogue of a per-query cost.
-    client = "docker" if os.path.exists("/usr/bin/docker") else None
-    if not client:
-        emit("rtt_container", error="no docker client")
-        return
-    name = "runway-probe-echo"
-    subprocess.run([client, "rm", "-f", name],
-                   capture_output=True, check=False)
-    run = subprocess.run(
-        [client, "run", "-d", "--rm", "-p", "127.0.0.1::80",
-         "python:3.12-slim", "python", "-c",
-         "import socket;s=socket.socket();s.setsockopt("
-         "socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',80));"
-         "s.listen(8)\n"
-         "while True:\n"
-         "    c,_=s.accept()\n"
-         "    d=c.recv(4096)\n"
-         "    c.sendall(b'x')\n"
-         "    c.close()\n"],
-        capture_output=True, text=True)
-    if run.returncode != 0:
-        emit("rtt_container", error="container start failed",
-             stderr=run.stderr.strip()[:200])
-        return
-    try:
-        mapped = subprocess.run(
-            [client, "port", name, "80/tcp"],
-            capture_output=True, text=True).stdout.strip().rsplit(":", 1)[-1]
-        deadline = time.monotonic() + 30
-        samples = None
-        while time.monotonic() < deadline:
-            try:
-                samples = _rtt("127.0.0.1", int(mapped))
-                break
-            except OSError:
-                time.sleep(0.5)
-        if samples is None:
-            emit("rtt_container", error="never accepted a connection")
-        else:
-            emit("rtt_container",
-                 median_us=round(statistics.median(samples), 2),
-                 p95_us=round(samples[int(0.95 * (len(samples) - 1))], 2),
-                 rounds=len(samples))
-    finally:
-        subprocess.run([client, "rm", "-f", name],
-                       capture_output=True, check=False)
+          def _allocate(n):
+              sink = None
+              for i in range(n):
+                  sink = {"k": i, "v": [i, i + 1, i + 2], "s": f"{i:04d}"}
+              return sink
 
 
-def main():
-    report_identity()
-    report_clocksource()
-    report_clock_cost()
-    report_interpreter()
-    report_network()
-    print("DONE", flush=True)
-    return 0
+          def report_interpreter():
+              n = 2_000_000
+              emit("interpreter_dispatch",
+                   ns_per_iter=round(median_of(lambda: _dispatch(n)) / n * 1e9, 2),
+                   iters=n)
+              m = 400_000
+              emit("interpreter_allocate",
+                   ns_per_iter=round(median_of(lambda: _allocate(m)) / m * 1e9, 2),
+                   iters=m)
 
 
-if __name__ == "__main__":
-    sys.exit(main())
-RUNWAY_PROBE_EOF
+          # --------------------------------------------------------------------------
+          # Per-request network latency
+          # --------------------------------------------------------------------------
+
+          def _echo_server(sock):
+              while True:
+                  try:
+                      conn, _ = sock.accept()
+                  except OSError:
+                      return
+                  with conn:
+                      try:
+                          while conn.recv(4096):
+                              conn.sendall(b"x")
+                      except OSError:
+                          pass
+
+
+          def _rtt(host, port, rounds=2000):
+              samples = []
+              with socket.create_connection((host, port), timeout=5) as sock:
+                  sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                  for _ in range(rounds):
+                      start = time.perf_counter()
+                      sock.sendall(b"ping")
+                      sock.recv(4096)
+                      samples.append((time.perf_counter() - start) * 1e6)
+              samples.sort()
+              return samples
+
+
+          def report_network():
+              listener = socket.socket()
+              listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              listener.bind(("127.0.0.1", 0))
+              listener.listen(8)
+              port = listener.getsockname()[1]
+              threading.Thread(target=_echo_server, args=(listener,),
+                               daemon=True).start()
+              try:
+                  s = _rtt("127.0.0.1", port)
+                  emit("rtt_loopback",
+                       median_us=round(statistics.median(s), 2),
+                       p95_us=round(s[int(0.95 * (len(s) - 1))], 2),
+                       rounds=len(s))
+              finally:
+                  listener.close()
+
+              # The real workflow's database is a container published on the loopback
+              # port, so a round-trip through docker's published port is the closest
+              # available analogue of a per-query cost.
+              client = "docker" if os.path.exists("/usr/bin/docker") else None
+              if not client:
+                  emit("rtt_container", error="no docker client")
+                  return
+              name = "runway-probe-echo"
+              subprocess.run([client, "rm", "-f", name],
+                             capture_output=True, check=False)
+              run = subprocess.run(
+                  [client, "run", "-d", "--rm", "-p", "127.0.0.1::80",
+                   "python:3.12-slim", "python", "-c",
+                   "import socket;s=socket.socket();s.setsockopt("
+                   "socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('0.0.0.0',80));"
+                   "s.listen(8)\n"
+                   "while True:\n"
+                   "    c,_=s.accept()\n"
+                   "    d=c.recv(4096)\n"
+                   "    c.sendall(b'x')\n"
+                   "    c.close()\n"],
+                  capture_output=True, text=True)
+              if run.returncode != 0:
+                  emit("rtt_container", error="container start failed",
+                       stderr=run.stderr.strip()[:200])
+                  return
+              try:
+                  mapped = subprocess.run(
+                      [client, "port", name, "80/tcp"],
+                      capture_output=True, text=True).stdout.strip().rsplit(":", 1)[-1]
+                  deadline = time.monotonic() + 30
+                  samples = None
+                  while time.monotonic() < deadline:
+                      try:
+                          samples = _rtt("127.0.0.1", int(mapped))
+                          break
+                      except OSError:
+                          time.sleep(0.5)
+                  if samples is None:
+                      emit("rtt_container", error="never accepted a connection")
+                  else:
+                      emit("rtt_container",
+                           median_us=round(statistics.median(samples), 2),
+                           p95_us=round(samples[int(0.95 * (len(samples) - 1))], 2),
+                           rounds=len(samples))
+              finally:
+                  subprocess.run([client, "rm", "-f", name],
+                                 capture_output=True, check=False)
+
+
+          def main():
+              report_identity()
+              report_clocksource()
+              report_clock_cost()
+              report_interpreter()
+              report_network()
+              print("DONE", flush=True)
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          RUNWAY_PROBE_EOF
           python3 /tmp/platform-probe.py
