@@ -8,7 +8,7 @@ on:
         type: choice
         options:
           - ubuntu-latest
-          - runway-frappe
+          - runway-dogfood
         default: ubuntu-latest
         required: true
   schedule:
