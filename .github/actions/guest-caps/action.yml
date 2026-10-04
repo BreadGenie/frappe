@@ -34,7 +34,12 @@ runs:
       echo "### 2000 small files, node_modules shaped"
       rm -rf "$GITHUB_WORKSPACE/.capsmall"; mkdir -p "$GITHUB_WORKSPACE/.capsmall"
       t0=$(date +%s.%N)
-      for i in $(seq 1 2000); do printf 'x%.0s' $(seq 1 512) > "$GITHUB_WORKSPACE/.capsmall/f$i"; done
+      python3 - <<'PYEOF'
+      import pathlib
+      d = pathlib.Path("$GITHUB_WORKSPACE/.capsmall")
+      for i in range(2000):
+          (d / f"f{i}").write_bytes(b"x" * 512)
+      PYEOF
       t1=$(date +%s.%N)
       echo "small_2000_s=$(echo "$t1 - $t0" | bc)"
       rm -rf "$GITHUB_WORKSPACE/.capsmall"

@@ -11,6 +11,14 @@ on:
           - runway-dogfood
         default: ubuntu-latest
         required: true
+      guest-caps:
+        description: 'Measure runner guest storage and network (diagnostic, off by default)'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+        required: false
   schedule:
     # Run everday at midnight UTC / 5:30 IST
     - cron: "0 0 * * *"
@@ -88,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/guest-caps
-        if: matrix.db == 'mariadb'
+        if: ${{ matrix.db == 'mariadb' && inputs.guest-caps == 'true' }}
       - uses: ./.github/actions/setup
         name: Environment Setup
         with:
