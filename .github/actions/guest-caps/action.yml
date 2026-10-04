@@ -34,9 +34,9 @@ runs:
       echo "### 2000 small files, node_modules shaped"
       rm -rf "$GITHUB_WORKSPACE/.capsmall"; mkdir -p "$GITHUB_WORKSPACE/.capsmall"
       t0=$(date +%s.%N)
-      python3 - <<'PYEOF'
-      import pathlib
-      d = pathlib.Path("$GITHUB_WORKSPACE/.capsmall")
+      CAPS_DIR="$GITHUB_WORKSPACE/.capsmall" python3 - <<'PYEOF' || echo "small file probe failed, continuing"
+      import os, pathlib
+      d = pathlib.Path(os.environ["CAPS_DIR"])
       for i in range(2000):
           (d / f"f{i}").write_bytes(b"x" * 512)
       PYEOF
