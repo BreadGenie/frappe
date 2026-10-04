@@ -87,6 +87,8 @@ jobs:
           - 3000:80
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/guest-caps
+        if: matrix.db == 'mariadb'
       - uses: ./.github/actions/setup
         name: Environment Setup
         with:
