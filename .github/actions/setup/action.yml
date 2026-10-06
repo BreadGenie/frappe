@@ -332,11 +332,15 @@ runs:
       bench set-config -g root_password "$DB_ROOT_PWD"
       bench set-config -g admin_password admin
 
+      # --force because a runner reused between jobs still holds the previous run's site,
+      # and the baked bench is restored into a workspace that already has one. Without it
+      # every job after the first on a runner failed with "Site test_site already exists".
       bench new-site test_site \
         --db-type "$DB" \
         --db-host 127.0.0.1 \
         --db-name test_frappe \
         --db-password test_frappe \
+        --force \
         --verbose
       bench --site test_site set-config allow_tests 1 --parse
       bench --site test_site set-config server_script_enabled 1 --parse
