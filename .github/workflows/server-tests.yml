@@ -94,7 +94,15 @@ jobs:
           - 2525:25
           - 3000:80
     steps:
+      # Checked out into a subdirectory on purpose. The default is the workspace root,
+      # which is where a Frappe image bakes its bench, and actions/checkout cleans its
+      # target by default: `git clean -ffdx` at that root removes env/, apps/, sites/ and
+      # Procfile, none of which are tracked by the Frappe repository. Checking out over
+      # the bake would delete it before the setup action looked, and the image would then
+      # claim a bench that was no longer there.
       - uses: actions/checkout@v6
+        with:
+          path: frappe-repo
       - uses: ./.github/actions/guest-caps
         if: ${{ matrix.db == 'mariadb' && inputs.guest-caps == 'true' }}
       - uses: ./.github/actions/setup

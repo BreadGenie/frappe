@@ -49,7 +49,10 @@ runs:
       REQUESTED_NODE: ${{ inputs.node-version }}
     run: |
       manifest=/etc/runway-frappe-bench.json
-      declared="$GITHUB_WORKSPACE/.github/frappe-source.json"
+      # Read from the job's own checkout, which the workflow places in a subdirectory so
+      # that cleaning it cannot touch the bench. This is the same file whether the bake is
+      # used or not, so the comparison does not depend on what the image happens to carry.
+      declared="$GITHUB_WORKSPACE/frappe-repo/.github/frappe-source.json"
       reason=
 
       if [[ ! -f $manifest ]]; then
