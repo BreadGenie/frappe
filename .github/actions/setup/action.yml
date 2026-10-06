@@ -76,12 +76,15 @@ runs:
               print(f"the image baked {baked or 'nothing'}, "
                     f"the workflow declares {want or 'nothing'}")
               raise SystemExit(0)
-      # A bake is only usable by the toolchain it was built against. '3.14' asks for the
-      # 3.14 series, so a 3.14.7 bake satisfies it while a 3.13 bake would not.
+      # A bake is only usable by the toolchain it was built against. The request may be a
+      # series ('3.14') or an exact version ('3.14.7'), and the workflow uses the exact
+      # form, so both have to match: a request is satisfied by that exact version or by
+      # a point release inside it. Testing only for the series form silently rejected
+      # every job, because '3.14.7' does not start with '3.14.7.'.
       for field, want, key in (('python', want_python, 'python_version'),
                                ('node', want_node, 'node_version')):
           version = manifest.get(key) or ''
-          if not version.startswith(want + '.'):
+          if version != want and not version.startswith(want + '.'):
               print(f"the image baked {field} {version}, the workflow asked for {want}")
               raise SystemExit(0)
       print('')
