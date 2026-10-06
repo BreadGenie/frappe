@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/BreadGenie/frappe.git",
+  "commit": "4423d0a362a702a20f4eee68470ef146081726b0",
+  "note": "The Frappe source these tests are written against. A Frappe runner image can carry this source already baked in as a bench; the setup action compares these two fields against the image's manifest and skips building a bench only when they match. Everything under .github in this repository is this workflow's own code and is deliberately excluded, so commits here do not change what is tested. When Frappe is updated here, the runner image must be rebuilt for this commit before the fast path is used again."
+}

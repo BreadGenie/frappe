@@ -38,7 +38,63 @@ runs:
       git config --global init.defaultBranch main
       git config --global advice.detachedHead false
 
+  # Decide once, here, whether this job needs to build a bench at all. A Frappe image
+  # can carry one already baked in; when it matches what this workflow tests, every
+  # step that exists only to produce a bench is skipped. The answer gates the steps
+  # below through this step's output rather than through each step's own guess.
+  - id: bake
+    shell: bash -e {0}
+    env:
+      REQUESTED_PYTHON: ${{ inputs.python-version }}
+      REQUESTED_NODE: ${{ inputs.node-version }}
+    run: |
+      manifest=/etc/runway-frappe-bench.json
+      declared="$GITHUB_WORKSPACE/.github/frappe-source.json"
+      reason=
+
+      if [[ ! -f $manifest ]]; then
+        reason="this image carries no baked bench"
+      elif [[ ! -f $declared ]]; then
+        reason="the workflow declares no Frappe source to match the bake against"
+      else
+        reason=$(python3 - "$manifest" "$declared" "$REQUESTED_PYTHON" "$REQUESTED_NODE" <<'PY'
+      import json, sys
+      manifest_path, declared_path, want_python, want_node = sys.argv[1:5]
+      try:
+          manifest = json.load(open(manifest_path))
+          declared = json.load(open(declared_path))
+      except (OSError, ValueError) as error:
+          print(f"a manifest could not be read: {error}")
+          raise SystemExit(0)
+      for baked_key, declared_key in (('frappe_repository', 'repository'),
+                                      ('frappe_commit', 'commit')):
+          baked, want = manifest.get(baked_key), declared.get(declared_key)
+          if baked != want:
+              print(f"the image baked {baked or 'nothing'}, "
+                    f"the workflow declares {want or 'nothing'}")
+              raise SystemExit(0)
+      # A bake is only usable by the toolchain it was built against. '3.14' asks for the
+      # 3.14 series, so a 3.14.7 bake satisfies it while a 3.13 bake would not.
+      for field, want, key in (('python', want_python, 'python_version'),
+                               ('node', want_node, 'node_version')):
+          version = manifest.get(key) or ''
+          if not version.startswith(want + '.'):
+              print(f"the image baked {field} {version}, the workflow asked for {want}")
+              raise SystemExit(0)
+      print('')
+      PY
+      )
+        if [[ -z $reason ]]; then
+          echo "usable=true" >> "$GITHUB_OUTPUT"
+          echo "Using the bench baked into this image: $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["frappe_commit"][:12])' "$manifest")"
+        else
+          echo "usable=false" >> "$GITHUB_OUTPUT"
+          echo "Building a bench for this job because $reason."
+        fi
+      fi
+
   - name: Clone
+    if: steps.bake.outputs.usable != 'true'
     uses: actions/checkout@v6
     with:
       path: frappe-src
@@ -49,6 +105,7 @@ runs:
       python-version: ${{ inputs.python-version }}
 
   - shell: bash -e {0}
+    if: steps.bake.outputs.usable != 'true'
     run: |
       # Check for valid Python & Merge Conflicts
       python -m compileall -q -f "${GITHUB_WORKSPACE}/frappe-src"
@@ -57,13 +114,18 @@ runs:
           exit 1
       fi
 
+  # Node is still put on PATH, but the dependency cache is not fetched: a baked bench
+  # already holds its node modules, so the cache would download several hundred megabytes
+  # for a tree that is already installed.
   - uses: actions/setup-node@v6
+    if: steps.bake.outputs.usable != 'true'
     with:
       node-version: ${{ inputs.node-version }}
       cache: yarn
       cache-dependency-path: frappe-src/yarn.lock
 
   - uses: astral-sh/setup-uv@v6
+    if: steps.bake.outputs.usable != 'true'
     with:
       enable-cache: true
       cache-dependency-glob: |
@@ -71,12 +133,14 @@ runs:
         **/requirements*.txt
 
   - name: Cache wkhtmltopdf
+    if: steps.bake.outputs.usable != 'true'
     uses: actions/cache@v4
     with:
       path: /tmp/wkhtmltox.deb
       key: wkhtmltox-0.12.6.1-2-jammy-amd64
 
   - shell: bash -e {0}
+    if: steps.bake.outputs.usable != 'true'
     run: |
       # Install System Dependencies (apt) in the background while installing the
       # frappe-bench tool via uv — the two share no inputs.
@@ -116,7 +180,10 @@ runs:
       end_time=$(date +%s)
       echo -e "\033[33mInstall System Dependencies + bench tool: $((end_time - start_time)) seconds\033[0m"
 
+  # bench init only produces a bench. When one is already baked this step is skipped, and
+  # the Procfile trimming below runs on its own so both paths end up with the same file.
   - shell: bash -e {0}
+    if: steps.bake.outputs.usable != 'true'
     run: |
       # Init Bench
       start_time=$(date +%s)
@@ -130,7 +197,18 @@ runs:
       # bench init sets origin to the local checkout path, fix it to point at GitHub
       git -C apps/frappe remote set-url upstream "https://github.com/${{ github.repository }}"
 
-      # Trim Procfile for CI
+      end_time=$(date +%s)
+      echo -e "\033[33mInit Bench: $((end_time - start_time)) seconds\033[0m"
+
+  - shell: bash -e {0}
+    name: Trim Procfile
+    run: |
+      # Runs whether the bench was baked or built here: the watchers and the schedule
+      # entry are CI noise either way, and the coverage flag has to be applied either way.
+      if [ ! -f Procfile ]; then
+        echo "No Procfile at $PWD" >&2
+        exit 1
+      fi
       sed -i '/^watch:/d' Procfile
       sed -i '/^schedule:/d' Procfile
       if [ "${{ inputs.disable-web }}" == "true" ]; then
@@ -142,10 +220,8 @@ runs:
         sed -i '/^socketio:/d' Procfile
       fi
 
-      end_time=$(date +%s)
-      echo -e "\033[33mInit Bench: $((end_time - start_time)) seconds\033[0m"
-
   - shell: bash -e {0}
+    if: steps.bake.outputs.usable != 'true'
     run: |
       # Install dev/test dependencies (python and node deps are independent,
       # so install them concurrently)
@@ -178,7 +254,7 @@ runs:
       start_time=$(date +%s)
 
       build_pid=""
-      if [ "$BUILD_ASSETS" == "true" ]; then
+      if [ "$BUILD_ASSETS" == "true" ] && [ "${{ steps.bake.outputs.usable }}" != "true" ]; then
         CI=Yes bench build --force --production &> ${GITHUB_WORKSPACE}/build_assets.log &
         build_pid=$!
       fi
