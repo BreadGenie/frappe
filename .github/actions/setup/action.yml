@@ -52,6 +52,13 @@ runs:
       declared="$GITHUB_WORKSPACE/.github/frappe-source.json"
       reason=
 
+      # The paths this step depends on, printed before it decides. A decision that
+      # silently falls back to the slow path looks identical to an image with no bake,
+      # so the evidence for the decision belongs in the log next to it.
+      echo "bake check: workspace=${GITHUB_WORKSPACE:-unset} pwd=$PWD"
+      echo "bake check: manifest=$manifest $([ -f $manifest ] && echo present || echo absent)"
+      echo "bake check: declared=$declared $([ -f $declared ] && echo present || echo absent)"
+
       if [[ ! -f $manifest ]]; then
         reason="this image carries no baked bench"
       elif [[ ! -f $declared ]]; then
