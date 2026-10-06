@@ -120,6 +120,15 @@ runs:
     run: |
       set -euo pipefail
       bench_root="$GITHUB_WORKSPACE"
+      # Done before the check below rather than after a restore, because the bench is
+      # often already in the workspace and the step then returns early. setup-uv is
+      # skipped on this path, and it is what normally puts the bench executable on PATH,
+      # so without this every later step fails with "bench: command not found".
+      if [ ! -x "$HOME/.local/bin/bench" ]; then
+        echo "This image carries a bench but no bench executable at $HOME/.local/bin/bench." >&2
+        exit 1
+      fi
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       if [ -f "$bench_root/env/bin/python" ] && [ -d "$bench_root/apps/frappe" ]; then
         echo "The baked bench is already in the workspace; nothing to restore."
         exit 0
@@ -140,14 +149,6 @@ runs:
           exit 1
         fi
       done
-      # setup-uv is skipped on this path, and it is what normally puts the bench
-      # executable on PATH, so the baked tool directory has to be added here. A job that
-      # reached Create Site without this failed with "bench: command not found".
-      if [ ! -x "$HOME/.local/bin/bench" ]; then
-        echo "This image carries a bench but no bench executable at $HOME/.local/bin/bench." >&2
-        exit 1
-      fi
-      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       echo "Restored the bench from $archive."
 
   - name: Setup Python
