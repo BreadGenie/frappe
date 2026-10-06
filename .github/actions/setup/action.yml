@@ -109,6 +109,39 @@ runs:
     with:
       path: frappe-src
 
+  # A job's own checkout clears its workspace, and a real job found the bench gone by the
+  # time it looked, while the image's manifest still claimed one. The archive the bake
+  # left outside the workspace is untouched by anything a job does, so the bench is put
+  # back from it when the workspace no longer has one. The digest is checked against the
+  # manifest first: an archive that does not match is a different artifact, and restoring
+  # it would run code nobody vouched for.
+  - shell: bash -e {0}
+    if: steps.bake.outputs.usable == 'true'
+    run: |
+      set -euo pipefail
+      bench_root="$GITHUB_WORKSPACE"
+      if [ -f "$bench_root/env/bin/python" ] && [ -d "$bench_root/apps/frappe" ]; then
+        echo "The baked bench is already in the workspace; nothing to restore."
+        exit 0
+      fi
+      echo "The workspace has no bench; restoring it from the image's archive."
+      archive=$(python3 -c 'import json,sys;print(json.load(open("/etc/runway-frappe-bench.json"))["archive"]["path"])')
+      expect=$(python3 -c 'import json,sys;print(json.load(open("/etc/runway-frappe-bench.json"))["archive"]["sha256"])')
+      actual=$(sha256sum "$archive" | cut -d" " -f1)
+      if [ "$actual" != "$expect" ]; then
+        echo "The archive at $archive hashes to $actual, not the recorded $expect." >&2
+        exit 1
+      fi
+      mkdir -p "$bench_root"
+      tar -xzf "$archive" -C "$bench_root"
+      for required in env/bin/python apps/frappe/frappe/__init__.py Procfile; do
+        if [ ! -e "$bench_root/$required" ]; then
+          echo "The archive did not contain $required." >&2
+          exit 1
+        fi
+      done
+      echo "Restored the bench from $archive."
+
   - name: Setup Python
     uses: actions/setup-python@v6
     with:
