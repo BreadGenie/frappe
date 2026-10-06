@@ -140,6 +140,14 @@ runs:
           exit 1
         fi
       done
+      # setup-uv is skipped on this path, and it is what normally puts the bench
+      # executable on PATH, so the baked tool directory has to be added here. A job that
+      # reached Create Site without this failed with "bench: command not found".
+      if [ ! -x "$HOME/.local/bin/bench" ]; then
+        echo "This image carries a bench but no bench executable at $HOME/.local/bin/bench." >&2
+        exit 1
+      fi
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       echo "Restored the bench from $archive."
 
   - name: Setup Python
