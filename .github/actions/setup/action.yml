@@ -371,5 +371,20 @@ runs:
 
   - shell: bash -e {0}
     run: |
-      # Start Bench
+      # Start Bench, and wait for the socket it publishes. Backgrounded without a wait,
+      # the next step can begin before anything is listening, and the run then fails
+      # against a site whose web process never came up.
       bench start &> ${GITHUB_WORKSPACE}/bench_start.log &
+      for _ in $(seq 1 90); do
+        # The web process writes this once it is serving, and bench_start.log records a
+        # failure immediately. Either is a real signal; a guessed-at socket file is not.
+        if [ -f sites/assets/assets.json ] || grep -qiE "error|traceback|address already in use" "${GITHUB_WORKSPACE}/bench_start.log" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+      done
+      if grep -qiE "error|traceback|address already in use" "${GITHUB_WORKSPACE}/bench_start.log" 2>/dev/null; then
+        echo 'bench start reported an error:'
+        cat "${GITHUB_WORKSPACE}/bench_start.log"
+        exit 1
+      fi
