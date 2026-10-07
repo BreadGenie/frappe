@@ -47,6 +47,7 @@ runs:
     env:
       REQUESTED_PYTHON: ${{ inputs.python-version }}
       REQUESTED_NODE: ${{ inputs.node-version }}
+      WANTED_BENCH_ROOT: ${{ github.workspace }}
     run: |
       manifest=/etc/runway-frappe-bench.json
       declared="$GITHUB_WORKSPACE/.github/frappe-source.json"
@@ -65,13 +66,21 @@ runs:
         reason="the workflow declares no Frappe source to match the bake against"
       else
         reason=$(python3 - "$manifest" "$declared" "$REQUESTED_PYTHON" "$REQUESTED_NODE" <<'PY'
-      import json, sys
+      import json, os, sys
       manifest_path, declared_path, want_python, want_node = sys.argv[1:5]
       try:
           manifest = json.load(open(manifest_path))
           declared = json.load(open(declared_path))
       except (OSError, ValueError) as error:
           print(f"a manifest could not be read: {error}")
+          raise SystemExit(0)
+      # The bench cannot be moved: its virtualenv and site-packages/frappe.pth both name
+      # the directory the bake ran in. Checking it here means the slow path is chosen with
+      # the reason in the log, rather than the fast path being declared usable and then
+      # failing at Create Site.
+      if manifest.get('bench_root') != os.environ.get('WANTED_BENCH_ROOT'):
+          print(f"the image baked its bench at {manifest.get('bench_root')}, "
+                f"this job's workspace is {os.environ.get('WANTED_BENCH_ROOT')}")
           raise SystemExit(0)
       for baked_key, declared_key in (('frappe_repository', 'repository'),
                                       ('frappe_commit', 'commit')):
@@ -149,6 +158,19 @@ runs:
           exit 1
         fi
       done
+      # The bench's virtualenv and its site-packages/frappe.pth both name the directory the
+      # bake ran in, so an archive unpacked anywhere else extracts cleanly, passes the
+      # checks above, and then cannot import its own app. Refusing here names the cause;
+      # carrying on fails at Create Site with a message about bench, which is true and
+      # useless. A self-hosted runner registered with a different work folder than the
+      # image was baked for reaches this, which is exactly when it should be said.
+      baked_root=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["bench_root"])' "$manifest")
+      if [ "$bench_root" != "$baked_root" ]; then
+        echo "This image baked its bench at $baked_root, but this job's workspace is $bench_root." >&2
+        echo "The bench's virtualenv names the directory it was built in and cannot be moved." >&2
+        echo 'Register the runner with that work folder, or build the image for this one.' >&2
+        exit 1
+      fi
       echo "Restored the bench from $archive."
 
   - name: Setup Python
