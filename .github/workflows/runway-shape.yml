@@ -1,7 +1,10 @@
 name: Runway Shape
 
 on:
-  workflow_dispatch:
+  # workflow_dispatch needs the file on the default branch; push keeps this triggerable from
+  # a fork branch, which is where the label under test lives.
+  push:
+    branches: [runway-dogfood]
   pull_request:
 
 permissions:
