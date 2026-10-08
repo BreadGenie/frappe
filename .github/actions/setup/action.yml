@@ -129,6 +129,10 @@ runs:
     run: |
       set -euo pipefail
       bench_root="$GITHUB_WORKSPACE"
+      # Each `run:` block is its own shell, so the bake check's `manifest` does not survive
+      # into this one. Without it the bench_root check below fails on an unbound variable
+      # rather than on a bench that is in the wrong place, which names neither cause.
+      manifest=/etc/runway-frappe-bench.json
       # Done before the check below rather than after a restore, because the bench is
       # often already in the workspace and the step then returns early. setup-uv is
       # skipped on this path, and it is what normally puts the bench executable on PATH,
