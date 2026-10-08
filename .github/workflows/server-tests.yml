@@ -9,6 +9,7 @@ on:
         options:
           - ubuntu-latest
           - runway-dogfood
+          - runway-2vcpu-6gb
         default: ubuntu-latest
         required: true
       guest-caps:
