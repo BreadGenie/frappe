@@ -13,7 +13,7 @@ permissions:
 jobs:
   shape:
     name: Prove the label selects this machine
-    runs-on: runway-2vcpu-8gb
+    runs-on: runway-2vcpu-6gb
     timeout-minutes: 15
 
     steps:
@@ -32,4 +32,4 @@ jobs:
           mem=$(awk '/MemTotal/ {print $2/1024}' /proc/meminfo)
           echo "measured: ${cpus} vCPU, ${mem} MiB"
           [ "$cpus" -ge 2 ] || { echo "::error::expected at least 2 vCPU"; exit 1; }
-          [ "${mem%.*}" -ge 7 ] || { echo "::error::expected at least 7 GiB"; exit 1; }
+          [ "${mem%.*}" -ge 5 ] || { echo "::error::expected at least 5 GiB"; exit 1; }
