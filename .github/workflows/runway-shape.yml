@@ -1,0 +1,32 @@
+name: Runway Shape
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shape:
+    name: Prove the label selects this machine
+    runs-on: runway-2vcpu-8gb
+    timeout-minutes: 15
+
+    steps:
+      - name: Show what the pool recorded
+        run: |
+          echo "runner:  ${RUNNER_NAME}"
+          echo "cpus:    $(nproc)"
+          echo "memory:  $(awk '/MemTotal/ {print $2/1024" MiB"}' /proc/meminfo)"
+          echo "work:    ${GITHUB_WORKSPACE}"
+
+      - name: Refuse to pretend
+        run: |
+          # The pool promised 2 vCPU and 8 GiB. Anything less is a failed selection, and
+          # saying so here beats a green check on the wrong machine.
+          cpus=$(nproc)
+          mem=$(awk '/MemTotal/ {print $2/1024}' /proc/meminfo)
+          echo "measured: ${cpus} vCPU, ${mem} MiB"
+          [ "$cpus" -ge 2 ] || { echo "::error::expected at least 2 vCPU"; exit 1; }
+          [ "${mem%.*}" -ge 7 ] || { echo "::error::expected at least 7 GiB"; exit 1; }
