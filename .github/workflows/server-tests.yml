@@ -56,7 +56,9 @@ jobs:
     name: Integration
     needs: checkrun
     if: ${{ needs.checkrun.outputs.build == 'strawberry' }}
-    runs-on: "${{ inputs.runner || 'ubuntu-latest' }}"
+    # Hardcoded on purpose. An expression here made the job's runner unknowable from the API
+    # and the run sat queued, so this states the label a repository actually ships.
+    runs-on: runway-2vcpu-6gb
     timeout-minutes: 30
     env:
       NODE_ENV: "production"
