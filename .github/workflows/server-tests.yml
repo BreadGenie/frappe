@@ -70,7 +70,8 @@ jobs:
       matrix:
         # Run against postgres too only when roulette decides it's needed
         db: ${{ fromJson(needs.checkrun.outputs.run_postgres == 'true' && '["mariadb", "postgres"]' || '["mariadb"]') }}
-        index: [1]
+        index: [1, 2]
+      max-parallel: 1
     services:
       postgres:
         image: postgres:18.0
