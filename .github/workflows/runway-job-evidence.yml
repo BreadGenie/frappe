@@ -1,0 +1,37 @@
+name: Runway job evidence
+on:
+  push:
+    branches: [runway-dogfood]
+permissions:
+  contents: read
+jobs:
+  evidence:
+    name: Verify runner and durable job evidence
+    runs-on: runway-2vcpu-6gb
+    timeout-minutes: 10
+    steps:
+      - name: Assert runner shape and workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cpus=$(nproc)
+          mem=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+          echo "runner: ${RUNNER_NAME}"
+          echo "cpus: ${cpus}"
+          echo "memory: ${mem} MiB"
+          echo "workspace: ${GITHUB_WORKSPACE}"
+          [[ "${RUNNER_NAME}" == runway-* ]]
+          [[ "${GITHUB_WORKSPACE}" == /home/runner/work/frappe/frappe ]]
+          [ "${cpus}" -eq 2 ]
+          [ "${mem}" -ge 5120 ]
+          printf '%s' "${RUNNER_NAME}" > "/tmp/runway-evidence-${GITHUB_RUN_ID}"
+      - name: Hold job through controller restart
+        run: sleep 180
+      - name: Verify guest survived controller restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$(cat "/tmp/runway-evidence-${GITHUB_RUN_ID}")" = "${RUNNER_NAME}" ]
+          python3 --version
+          git --version
+          docker version
