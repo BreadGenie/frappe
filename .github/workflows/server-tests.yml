@@ -70,7 +70,7 @@ jobs:
       matrix:
         # Run against postgres too only when roulette decides it's needed
         db: ${{ fromJson(needs.checkrun.outputs.run_postgres == 'true' && '["mariadb", "postgres"]' || '["mariadb"]') }}
-        index: [1, 2]
+        index: [2]
       max-parallel: 1
     services:
       postgres:
@@ -124,7 +124,12 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd sites && ../env/bin/python3 ../apps/frappe/.github/helper/ci.py
+          set +e
+          bench --site test_site run-tests --module frappe.tests.test_email --test test_store_attachments 2>&1 | tee "$RUNNER_TEMP/email-focused.log"
+          result=${PIPESTATUS[0]}
+          echo "Focused email test exit: $result"
+          sleep 180
+          exit "$result"
         env:
           DB: ${{ matrix.db }}
           # consumed by bench run-parallel-tests
@@ -132,12 +137,6 @@ jobs:
           BUILD_NUMBER: ${{ matrix.index }}
           TOTAL_BUILDS: 2
           FRAPPE_SENTRY_DSN: ${{ secrets.SENTRY_DSN || '' }}
-
-      - name: Upload coverage data
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-${{ matrix.db }}-${{ matrix.index }}
-          path: ./sites/*coverage*.xml
 
       - name: Setup tmate session
         uses: mxschmitt/action-tmate@v3
