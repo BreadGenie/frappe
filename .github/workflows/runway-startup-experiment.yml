@@ -1,0 +1,16 @@
+name: Runway Startup Experiment
+on:
+  push:
+    branches: [runway-startup-latency-20261010]
+permissions:
+  contents: read
+jobs:
+  startup:
+    runs-on: runway-2vcpu-6gb
+    timeout-minutes: 5
+    steps:
+      - name: First job command
+        run: |
+          python3 -c 'from datetime import datetime, UTC; print("RUNWAY_FIRST_COMMAND", datetime.now(UTC).isoformat())'
+          test -x /home/runner/actions-runner/bin/Runner.Listener
+          docker info >/dev/null
