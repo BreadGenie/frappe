@@ -14,4 +14,4 @@ jobs:
           test -x /home/runner/actions-runner/bin/Runner.Listener
           docker info >/dev/null
           test "$(nproc)" -eq 2
-          sleep 25
+          sleep 100
