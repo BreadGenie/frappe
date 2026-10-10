@@ -8,7 +8,7 @@ on:
         type: choice
         options:
           - ubuntu-latest
-          - runway-2vcpu-6gb
+          - runway-startup-experiment-5g
         default: ubuntu-latest
         required: true
       guest-caps:
@@ -57,7 +57,7 @@ jobs:
     if: ${{ needs.checkrun.outputs.build == 'strawberry' }}
     # Hardcoded on purpose. An expression here made the job's runner unknowable from the API
     # and the run sat queued, so this states the label a repository actually ships.
-    runs-on: runway-2vcpu-6gb
+    runs-on: runway-startup-experiment-5g
     timeout-minutes: 30
     env:
       NODE_ENV: "production"
