@@ -1,0 +1,17 @@
+name: Warm Capacity Experiment
+on:
+  push:
+    branches: [runway-warm-capacity-20261010]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: runway-warm-capacity-2slot
+    timeout-minutes: 5
+    steps:
+      - name: Validate concurrent reserve
+        run: |
+          test -x /home/runner/actions-runner/bin/Runner.Listener
+          docker info >/dev/null
+          test "$(nproc)" -eq 2
+          sleep 100
