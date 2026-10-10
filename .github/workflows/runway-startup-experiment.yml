@@ -14,3 +14,6 @@ jobs:
           python3 -c 'from datetime import datetime, UTC; print("RUNWAY_FIRST_COMMAND", datetime.now(UTC).isoformat())'
           test -x /home/runner/actions-runner/bin/Runner.Listener
           docker info >/dev/null
+          cat /proc/uptime
+          systemctl show ssh.service docker.service systemd-networkd.service apply-metadata.service --property=Id --property=ExecMainStartTimestampMonotonic --property=ActiveEnterTimestampMonotonic --property=InactiveExitTimestampMonotonic
+          systemd-analyze critical-chain docker.service ssh.service
