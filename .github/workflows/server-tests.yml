@@ -8,7 +8,7 @@ on:
         type: choice
         options:
           - ubuntu-latest
-          - runway-startup-experiment-5g
+          - runway-new-host-5g-a
         default: ubuntu-latest
         required: true
       guest-caps:
@@ -55,9 +55,7 @@ jobs:
     name: Integration
     needs: checkrun
     if: ${{ needs.checkrun.outputs.build == 'strawberry' }}
-    # Hardcoded on purpose. An expression here made the job's runner unknowable from the API
-    # and the run sat queued, so this states the label a repository actually ships.
-    runs-on: runway-startup-experiment-5g
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
       NODE_ENV: "production"
@@ -71,7 +69,12 @@ jobs:
         # Run against postgres too only when roulette decides it's needed
         db: ${{ fromJson(needs.checkrun.outputs.run_postgres == 'true' && '["mariadb", "postgres"]' || '["mariadb"]') }}
         index: [1, 2]
-      max-parallel: 1
+        include:
+          - index: 1
+            runner: runway-new-host-5g-a
+          - index: 2
+            runner: runway-new-host-5g-b
+      max-parallel: 2
     services:
       postgres:
         image: postgres:18.0
