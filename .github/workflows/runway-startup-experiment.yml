@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   startup:
-    runs-on: runway-2vcpu-6gb
+    runs-on: runway-startup-experiment-5g
     timeout-minutes: 5
     steps:
       - name: First job command
