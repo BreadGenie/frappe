@@ -1,0 +1,29 @@
+name: Runway New Host Experiment
+on:
+  push:
+    branches: [runway-new-host-20261010]
+permissions:
+  contents: read
+jobs:
+  runner_a:
+    runs-on: runway-new-host-5g-a
+    timeout-minutes: 5
+    steps:
+      - name: Validate runner and overlap
+        run: |
+          python3 -c 'from datetime import datetime, UTC; print("RUNWAY_FIRST_COMMAND", datetime.now(UTC).isoformat())'
+          test -x /home/runner/actions-runner/bin/Runner.Listener
+          docker info >/dev/null
+          test "$(nproc)" -eq 2
+          sleep 30
+  runner_b:
+    runs-on: runway-new-host-5g-b
+    timeout-minutes: 5
+    steps:
+      - name: Validate runner and overlap
+        run: |
+          python3 -c 'from datetime import datetime, UTC; print("RUNWAY_FIRST_COMMAND", datetime.now(UTC).isoformat())'
+          test -x /home/runner/actions-runner/bin/Runner.Listener
+          docker info >/dev/null
+          test "$(nproc)" -eq 2
+          sleep 30
