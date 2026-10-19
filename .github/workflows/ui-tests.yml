@@ -38,7 +38,7 @@ jobs:
     name: Integration
     needs: checkrun
     if: ${{ needs.checkrun.outputs.build == 'strawberry' }}
-    runs-on: ubuntu-latest
+    runs-on: runway-frappe-validation
     timeout-minutes: 30
     env:
       NODE_ENV: "production"
