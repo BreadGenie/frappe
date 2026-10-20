@@ -47,6 +47,7 @@ runs:
       WANTED_BENCH_ROOT: ${{ github.workspace }}
     run: |
       manifest=/etc/runway-frappe-bench.json
+      if [[ -f $manifest && ! -r $manifest ]]; then sudo chmod 0644 "$manifest"; fi
       declared="$GITHUB_WORKSPACE/.github/frappe-source.json"
       reason=
 
