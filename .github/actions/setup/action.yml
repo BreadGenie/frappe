@@ -149,6 +149,42 @@ runs:
       fi
       echo "Restored the bench from $archive."
 
+  # The baked archive carries base-pin source, so the checked-out readiness
+  # patch never reaches it. Apply the overlay to the restored copy only;
+  # non-baked clones already contain it via checkout, so skip them here.
+  - name: Apply RQ worker readiness overlay
+    if: steps.bake.outputs.usable == 'true'
+    shell: bash -e {0}
+    run: |
+      set -euo pipefail
+      frappe_dir="$GITHUB_WORKSPACE/apps/frappe"
+      target="$frappe_dir/frappe/commands/test_commands.py"
+      patch="$GITHUB_WORKSPACE/.github/patches/rq-worker-readiness.patch"
+      base_pin=$(python3 -c 'import json,os;print(json.load(open(os.environ["GITHUB_WORKSPACE"]+"/.github/frappe-source.json"))["commit"])')
+      base_sha="f9dd25745240cf0c3f2ab3a8311b825a7c4878c812dcd1483f41f737ebbe7512"
+      patch_sha="b1601285e302e051a82eb1e1a419c50806dc8f809fd15e6110fb0e2c55ff2c23"
+      expect_sha="bbf144e45178b804d62b8e36840f1888645d26751b195a07cd0a22fde5cccf8c"
+      actual_patch=$(sha256sum "$patch" | cut -d' ' -f1)
+      current=$(sha256sum "$target" | cut -d' ' -f1)
+      echo "readiness overlay: base_pin=$base_pin patch=$actual_patch file=$current"
+      if [ "$actual_patch" != "$patch_sha" ]; then
+        echo "The overlay patch does not match the approved bytes; refusing to apply." >&2
+        exit 1
+      fi
+      if [ "$current" = "$expect_sha" ]; then
+        echo "Readiness overlay already applied; nothing to do."
+        exit 0
+      fi
+      if [ "$current" != "$base_sha" ]; then
+        echo "The restored source is neither the base pin nor the patched file; refusing to apply." >&2
+        exit 1
+      fi
+      git -C "$frappe_dir" apply --check "$patch"
+      git -C "$frappe_dir" apply "$patch"
+      current=$(sha256sum "$target" | cut -d' ' -f1)
+      echo "Readiness overlay applied: file=$current"
+      [ "$current" = "$expect_sha" ]
+
   - name: Setup Python
     uses: actions/setup-python@v6
     with:

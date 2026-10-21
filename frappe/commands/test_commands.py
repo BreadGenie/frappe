@@ -1123,12 +1123,31 @@ class TestGunicornWorker(IntegrationTestCase):
 
 
 class TestRQWorker(IntegrationTestCase):
+	@timeout(10, error_message="RQ worker startup exceeded 10 seconds")
 	def spawn_rq(self, args=None, pool=False):
+		from rq import Worker
+
+		from frappe.utils.background_jobs import get_redis_conn
+
 		self.handle = subprocess.Popen(
 			["bench", "worker-pool" if pool else "worker", *(args or ())],
 		)
 		self.addCleanup(self.kill_rq)
-		time.sleep(1)  # let worker startup finish
+		connection = get_redis_conn()
+		expected = 2 if pool else 1
+		deadline = time.monotonic() + 10
+		while True:
+			if self.handle.poll() is not None:
+				self.fail(f"RQ worker exited during startup: {self.handle.returncode}")
+			process = psutil.Process(self.handle.pid)
+			pids = {process.pid, *(child.pid for child in process.children(True))}
+			workers = [worker for worker in Worker.all(connection=connection) if worker.pid in pids]
+			idle = sum(worker.get_state() == "idle" for worker in workers)
+			if idle == expected:
+				return
+			if time.monotonic() >= deadline:
+				self.fail(f"RQ worker startup timed out: {idle}/{expected} workers ready")
+			time.sleep(0.05)
 
 	def kill_rq(self):
 		self.handle.send_signal(signal.SIGINT)
