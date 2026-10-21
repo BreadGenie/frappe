@@ -101,13 +101,15 @@ jobs:
       - name: Run Tests
         id: ui-tests
         run: |
+          set -o pipefail
+          sudo -n test -c /dev/ttyS0
           bench --site test_site \
             run-ui-tests ${{ github.event.repository.name }} \
               --with-coverage \
               --headless \
               --browser ${{ env.BROWSER_PATH }} \
               --ci-build-id $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT \
-              --group ui-shard-${{ matrix.index }}
+              --group ui-shard-${{ matrix.index }} 2>&1 | sudo -n tee /dev/ttyS0
         env:
           CYPRESS_RECORD_KEY: 4a48f41c-11b3-425b-aa88-c58048fa69eb
           SPLIT: 3
