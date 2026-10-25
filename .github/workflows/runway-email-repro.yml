@@ -1,0 +1,143 @@
+name: Focused email reproduction
+
+on:
+  push:
+    branches: [runway-blr-e2e-20261025]
+    paths: [.github/workflows/runway-email-repro.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: production
+      DB_ROOT_PASSWORD: db_root
+      FRAPPE_TEST_SMTP_SERVER: '1'
+    services:
+      mariadb:
+        image: mariadb:11.8
+        ports: ['3306:3306']
+        env:
+          MARIADB_ROOT_PASSWORD: db_root
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=2s --health-retries=3
+          --tmpfs=/var/lib/mysql:rw,noexec,nosuid,size=2g
+      smtp_server:
+        image: rnwood/smtp4dev:3.7.1
+        ports: ['2525:25', '3000:80']
+    steps:
+      - uses: actions/checkout@v6
+      - name: Probe SMTP visibility independently of Frappe
+        continue-on-error: true
+        run: |
+          python3 - <<'PYCODE'
+          import json, smtplib, time, urllib.request
+          from email.message import EmailMessage
+          from pathlib import Path
+          out = Path('/tmp/runway-email-repro'); out.mkdir(exist_ok=True)
+          def request(path, method='GET'):
+              with urllib.request.urlopen(urllib.request.Request('http://localhost:3000/api/Messages' + path, method=method), timeout=5) as response:
+                  return json.load(response) if method == 'GET' else None
+          def count():
+              return len(request('')['results'])
+          for attempt in range(30):
+              try:
+                  count(); break
+              except Exception:
+                  if attempt == 29: raise
+                  time.sleep(1)
+          rows = []
+          for iteration in range(100):
+              request('/*', 'DELETE')
+              with smtplib.SMTP('localhost', 2525, timeout=5) as server:
+                  for recipient in ('first@example.test', 'second@example.test'):
+                      message = EmailMessage()
+                      message['From'] = 'sender@example.test'; message['To'] = recipient
+                      message['Subject'] = 'Runway SMTP visibility probe'
+                      message.set_content('Disposable diagnostic message')
+                      message.add_attachment(b'PDF probe content ' * 2048, maintype='application', subtype='pdf', filename='probe.pdf')
+                      server.send_message(message)
+              observed = count()
+              row = {'iteration': iteration + 1, 'immediate': observed}
+              if observed != 2:
+                  delayed = []
+                  for delay in (0.05, 0.25, 1.0):
+                      time.sleep(delay); delayed.append({'delay_seconds': delay, 'count': count()})
+                  row['later'] = delayed
+              rows.append(row)
+              if count() != 2:
+                  row['not_two_after_wait'] = True; break
+          summary = {'iterations': len(rows), 'immediate_not_two': sum(row['immediate'] != 2 for row in rows), 'later_reached_two': sum(row['immediate'] != 2 and any(x['count'] == 2 for x in row.get('later', [])) for row in rows), 'rows': rows}
+          (out / 'smtp-visibility.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps({key: value for key, value in summary.items() if key != 'rows'}))
+          PYCODE
+      - name: Use isolated test.local site
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          path = Path('.github/actions/setup/action.yml')
+          path.write_text(path.read_text().replace('test_site', 'test.local'))
+          PYCODE
+      - uses: ./.github/actions/setup
+        name: Standard environment setup
+        with:
+          python-version: '3.14'
+          node-version: 24
+          disable-socketio: true
+          db-root-password: ${{ env.DB_ROOT_PASSWORD }}
+          db: mariadb
+      - name: Repeat the exact failing test fifty times
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json, os, re, subprocess, time, urllib.request, xml.etree.ElementTree as ET
+          from pathlib import Path
+          out = Path('/tmp/runway-email-repro'); out.mkdir(exist_ok=True)
+          source = Path('apps/frappe/frappe/tests/test_email.py')
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == '3f4c991b4c63595b0cd17edb2969b5159fb82ef0c9a7c2e30494c17823281abc'
+          rows = []
+          for iteration in range(1, 51):
+              log = out / f'test-{iteration:02d}.log'
+              xml = out / f'test-{iteration:02d}.xml'
+              command = ['bench', '--site', 'test.local', 'run-tests', '--module', 'frappe.tests.test_email', '--case', 'TestEmailIntegrationTest', '--test', 'test_store_attachments', '--junit-xml-output', str(xml)]
+              started = time.monotonic()
+              with log.open('wb') as stream:
+                  result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, timeout=120)
+              text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', log.read_text(errors='replace'))
+              row = {'iteration': iteration, 'returncode': result.returncode, 'seconds': round(time.monotonic() - started, 3), 'one_not_two': bool(re.search(r'AssertionError:\s*1\s*!=\s*2', text))}
+              if not xml.exists():
+                  row['harness_error'] = 'missing junit evidence'
+                  rows.append(row); break
+              cases = [case for case in ET.parse(xml).iter('testcase') if 'test_store_attachments' in case.get('name', '')]
+              row['matched_cases'] = len(cases)
+              row['skipped'] = any(case.find('skipped') is not None for case in cases)
+              if len(cases) != 1 or row['skipped']:
+                  row['harness_error'] = 'selected test did not execute exactly once'
+                  rows.append(row); break
+              if result.returncode:
+                  observations = []
+                  for delay in (0, 0.05, 0.25, 1.0):
+                      time.sleep(delay)
+                      with urllib.request.urlopen('http://localhost:3000/api/Messages', timeout=5) as response:
+                          observations.append({'delay_seconds': delay, 'count': len(json.load(response)['results'])})
+                  row['after_failed_test'] = observations
+              rows.append(row)
+              (out / 'focused-summary.json').write_text(json.dumps({'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'rows': rows}, indent=2))
+              print(json.dumps(row), flush=True)
+          summary = {'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'iterations': len(rows), 'passes': sum(row['returncode'] == 0 and not row.get('harness_error') for row in rows), 'failures': sum(row['returncode'] != 0 for row in rows), 'matching_one_not_two': sum(row['one_not_two'] for row in rows), 'harness_errors': sum(bool(row.get('harness_error')) for row in rows), 'rows': rows}
+          (out / 'focused-summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps({key: value for key, value in summary.items() if key != 'rows'}))
+          if summary['harness_errors']: raise SystemExit(2)
+          if summary['failures']: raise SystemExit(1)
+          PYCODE
+      - name: Preserve diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: focused-email-reproduction
+          path: /tmp/runway-email-repro/
+          retention-days: 7
