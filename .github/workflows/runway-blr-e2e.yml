@@ -1,8 +1,7 @@
 name: Runway BLR end-to-end
 
 on:
-  push:
-    branches: [runway-blr-e2e-20261025]
+  workflow_dispatch:
 
 permissions:
   contents: read
