@@ -1,0 +1,42 @@
+name: Runway BLR end-to-end
+
+on:
+  push:
+    branches: [runway-blr-e2e-20261025]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify one managed BLR runner
+    runs-on: runway-blr-development-20261024
+    timeout-minutes: 5
+    steps:
+      - name: Verify execution on the managed guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from datetime import UTC, datetime
+          from pathlib import Path
+
+          processors = int(subprocess.check_output(['nproc'], text=True).strip())
+          memory_kib = int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:')))
+          assert processors == 4, 'Expected the configured four guest CPUs'
+          assert memory_kib >= 15 * 1024 * 1024, 'Expected at least 15 GiB guest memory'
+          assert os.environ['RUNNER_NAME'], 'Runner identity missing'
+          assert os.environ['GITHUB_JOB'] == 'verify', 'Unexpected job'
+          print(json.dumps({
+              'verified_at': datetime.now(UTC).isoformat(),
+              'runner': os.environ['RUNNER_NAME'],
+              'job': os.environ['GITHUB_JOB'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'processors': processors,
+              'memory_kib': memory_kib,
+              'result': 'PASS',
+          }, sort_keys=True))
+          PY
