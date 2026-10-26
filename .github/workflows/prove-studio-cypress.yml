@@ -21,7 +21,7 @@ jobs:
             ref: a9c665762079f3c0182f3b3077a1b60f9e86c077
             expected: "false"
     env:
-      CYPRESS_CACHE_FOLDER: ${{ runner.temp }}/studio-cypress-cache
+      CYPRESS_CACHE_FOLDER: /tmp/studio-cypress-proof
     steps:
       - uses: actions/checkout@v7
         with:
