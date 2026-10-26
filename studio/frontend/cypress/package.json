@@ -1,0 +1,12 @@
+{
+	"name": "studio-component-tests",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "cd .. && cypress run --component --config-file cypress/cypress.config.ts",
+		"test:open": "cd .. && cypress open --component --config-file cypress/cypress.config.ts"
+	},
+	"devDependencies": {
+		"cypress": "^15.8.2"
+	}
+}

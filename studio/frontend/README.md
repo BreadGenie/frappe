@@ -86,6 +86,17 @@ It watches the `studio` folder of every installed app and imports changed app/pa
 
 **Note:** The editor's code lives in `frappe-bench/apps/frappe/studio/frontend`; the Python side (DocTypes, API, build, sync, AI) is the `frappe.studio` package in `frappe-bench/apps/frappe/frappe/studio`. Like any other app, frappe keeps its exported Studio apps as subfolders of `studio/`; a subfolder counts as an app only when it holds `<folder>/<folder>.json`.
 
+### Component Tests
+
+Cypress is installed separately from the editor's build dependencies. From `studio/frontend`, run:
+
+```sh
+yarn --cwd cypress install --frozen-lockfile --production=false
+yarn test:cypress
+```
+
+The server-backed specs need a running bench and a test site. Use `yarn test:cypress:open` for the interactive runner.
+
 ### Bench Commands
 
 ```bash

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url"
 import { defineConfig } from "cypress"
 
 export default defineConfig({
@@ -12,7 +13,7 @@ export default defineConfig({
 			framework: "vue",
 			bundler: "vite",
 			viteConfig: {
-				configFile: "vite.config.js",
+				configFile: fileURLToPath(new URL("../vite.config.js", import.meta.url)),
 				// a separate dep cache, so running specs never re-optimizes the one a live `yarn dev` is serving
 				cacheDir: "node_modules/.vite-cypress",
 			},

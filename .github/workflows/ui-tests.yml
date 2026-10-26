@@ -141,7 +141,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # not NODE_ENV=production: yarn would skip the editor's devDependencies, cypress included
       PYTHONWARNINGS: "ignore"
       DB_ROOT_PASSWORD: db_root
     services:
@@ -155,12 +154,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # the editor's yarn install (part of bench build) downloads the Cypress binary
       - name: Cache Cypress binary
         uses: actions/cache@v6
         with:
           path: ~/.cache/Cypress
-          key: ${{ runner.os }}-cypress-${{ hashFiles('studio/frontend/yarn.lock') }}
+          key: ${{ runner.os }}-cypress-${{ hashFiles('studio/frontend/cypress/yarn.lock') }}
 
       - uses: ./.github/actions/setup
         name: Environment Setup
@@ -172,6 +170,12 @@ jobs:
           disable-workers: true
           db-root-password: ${{ env.DB_ROOT_PASSWORD }}
           db: mariadb
+
+      - name: Install component test dependencies
+        run: |
+          cd ${GITHUB_WORKSPACE}/apps/${{ github.event.repository.name }}/studio/frontend
+          node -e 'require("node:assert/strict").throws(() => require.resolve("cypress"), { code: "MODULE_NOT_FOUND" })'
+          yarn --cwd cypress install --frozen-lockfile --production=false
 
       # the data-source specs call the test site through the dev server's proxy
       - name: Run Component Tests

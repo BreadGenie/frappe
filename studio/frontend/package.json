@@ -13,8 +13,8 @@
 		"extract-frappeui-types": "tsx src/scripts/tsToJSONGenerator.ts frappeui",
 		"extract-frameworkui-types": "tsx src/scripts/tsToJSONGenerator.ts frameworkui",
 		"extract-studio-types": "tsx src/scripts/tsToJSONGenerator.ts studio",
-		"test:cypress": "cypress run --component",
-		"test:cypress:open": "cypress open --component"
+		"test:cypress": "yarn --cwd cypress test",
+		"test:cypress:open": "yarn --cwd cypress test:open"
 	},
 	"dependencies": {
 		"@codemirror/lang-css": "^6.3.1",
@@ -44,7 +44,6 @@
 		"vuedraggable": "^4.1.0"
 	},
 	"devDependencies": {
-		"cypress": "^15.8.2",
 		"eslint": "^8.19.0",
 		"eslint-plugin-vue": "^9.11.0",
 		"mdn-data": "2.27.1",
