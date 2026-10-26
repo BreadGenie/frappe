@@ -1,6 +1,8 @@
 name: Prove Studio Cypress installation
 on:
   workflow_dispatch:
+  push:
+    branches: [proof/studio-cypress-install]
 permissions:
   contents: read
 jobs:
