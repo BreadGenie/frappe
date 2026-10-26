@@ -173,6 +173,8 @@ jobs:
           db: mariadb
 
       - name: Install Cypress binary
+        env:
+          CYPRESS_INSTALL_BINARY: ""
         run: |
           cd ${GITHUB_WORKSPACE}/apps/${{ github.event.repository.name }}/studio/frontend
           yarn cypress install

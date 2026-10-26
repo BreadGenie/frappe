@@ -727,7 +727,7 @@ async function run_app_build(app, root_app_path) {
 	const started = Date.now();
 	let node_modules = path.resolve(root_app_path, "node_modules");
 	if (!fs.existsSync(node_modules)) {
-		await run_command("CYPRESS_INSTALL_BINARY=0 yarn install --frozen-lockfile", {
+		await run_command("yarn install --frozen-lockfile", {
 			cwd: root_app_path,
 			app,
 			step: "install",
