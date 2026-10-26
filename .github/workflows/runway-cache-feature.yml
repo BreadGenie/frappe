@@ -1,0 +1,190 @@
+name: Runway managed cache feature integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# Serializes this workflow's runs; parent must also retain runner-pool concurrency 1.
+concurrency:
+  group: runway-blr-development-20261024-managed-cache
+  cancel-in-progress: false
+
+env:
+  CACHE_KEY: runway-managed-cache-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  save:
+    name: Cold restore and implicit post save
+    runs-on: runway-blr-development-20261024
+    timeout-minutes: 15
+    steps:
+      - name: Require approved scope and empty local paths
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          assert os.environ['GITHUB_REPOSITORY'] == 'BreadGenie/frappe'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/runway-blr-e2e-20261025'
+          assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+          assert os.environ['CACHE_KEY'] == (
+              'runway-managed-cache-v1-'
+              + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+          )
+          assert not (Path.home() / '.runway-managed-ci/cache-v1').exists()
+          assert not (Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof').exists()
+          PY
+
+      # Official, unmodified action. Eligible resolved commit (parent must attest):
+      # 0057852bfaa89a56745cba8c7296529d2fc39830, toolkit @actions/cache 4.1.0.
+      - name: Restore unique cold key and register official post save
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.runway-managed-ci/cache-v1
+          key: ${{ env.CACHE_KEY }}
+          enableCrossOsArchive: false
+
+      - name: Require miss and write deterministic cache and separate artifact proof
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          assert os.environ['CACHE_HIT'] != 'true', 'First restore must miss'
+          size = 2 * 1024 * 1024
+          digest = '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc'
+          payload = hashlib.shake_256(b'runway-managed-ci/cache-fixture/v1\x00').digest(size)
+          assert hashlib.sha256(payload).hexdigest() == digest
+          cache = Path.home() / '.runway-managed-ci/cache-v1'
+          cache.mkdir(parents=True, exist_ok=False)
+          (cache / 'payload.bin').write_bytes(payload)
+
+          # This directory is outside the cached path; no cached checksum is trusted.
+          proof = Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof'
+          proof.mkdir(exist_ok=False)
+          metadata = {
+              'schema': 1,
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'ref': os.environ['GITHUB_REF'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'cache_key': os.environ['CACHE_KEY'],
+              'payload_size': size,
+              'payload_sha256': digest,
+          }
+          header = json.dumps(metadata, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+          body = hashlib.shake_256(b'runway-managed-ci/artifact-proof/v1\x00').digest(4096)
+          (proof / 'proof.bin').write_bytes(header + body)
+          print('Generated 2097152 deterministic cache bytes and separate artifact proof')
+          PY
+
+      - name: Upload separate proof using original Results service
+        uses: actions/upload-artifact@v7
+        with:
+          name: runway-managed-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runway-managed-ci-proof/proof.bin
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      # actions/cache@v4 performs its own implicit post save after this job's steps.
+      # needs waits for that post step; there is no explicit save action or retry job.
+
+  restore:
+    name: Exact cache hit and artifact byte verification
+    needs: save
+    runs-on: runway-blr-development-20261024
+    timeout-minutes: 15
+    steps:
+      - name: Require empty local paths on the second runner
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          assert os.environ['GITHUB_REPOSITORY'] == 'BreadGenie/frappe'
+          assert os.environ['GITHUB_REF'] == 'refs/heads/runway-blr-e2e-20261025'
+          assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+          assert not (Path.home() / '.runway-managed-ci/cache-v1').exists()
+          assert not (Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof').exists()
+          PY
+
+      - name: Restore exact key with the same path and cache version inputs
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.runway-managed-ci/cache-v1
+          key: ${{ env.CACHE_KEY }}
+          enableCrossOsArchive: false
+          fail-on-cache-miss: true
+
+      - name: Require exact hit and verify independent expected digest and every byte
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          assert os.environ['CACHE_HIT'] == 'true', 'Second restore must be an exact hit'
+          cache = Path.home() / '.runway-managed-ci/cache-v1'
+          assert set(p.name for p in cache.iterdir()) == {'payload.bin'}
+          fixture = cache / 'payload.bin'
+          assert not fixture.is_symlink() and fixture.is_file()
+          assert fixture.stat().st_size == 2 * 1024 * 1024
+          actual = fixture.read_bytes()
+          expected_digest = '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc'
+          assert hashlib.sha256(actual).hexdigest() == expected_digest, 'Cache digest mismatch'
+          expected = hashlib.shake_256(b'runway-managed-ci/cache-fixture/v1\x00').digest(2 * 1024 * 1024)
+          assert actual == expected, 'Cache byte mismatch'
+          print('Exact cache hit: size, independent SHA-256 and every byte verified')
+          PY
+
+      - name: Download separate proof using original Results service
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: runway-managed-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runway-managed-ci-proof
+
+      - name: Verify every artifact proof byte and exact attempt binding
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = {
+              'schema': 1,
+              'repository': 'BreadGenie/frappe',
+              'ref': 'refs/heads/runway-blr-e2e-20261025',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'cache_key': 'runway-managed-cache-v1-' + os.environ['GITHUB_RUN_ID']
+                  + '-' + os.environ['GITHUB_RUN_ATTEMPT'],
+              'payload_size': 2 * 1024 * 1024,
+              'payload_sha256': '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc',
+          }
+          header = json.dumps(metadata, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+          body = hashlib.shake_256(b'runway-managed-ci/artifact-proof/v1\x00').digest(4096)
+          proof = Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof'
+          assert set(p.name for p in proof.iterdir()) == {'proof.bin'}
+          fixture = proof / 'proof.bin'
+          assert not fixture.is_symlink() and fixture.is_file()
+          assert fixture.stat().st_size == len(header) + len(body)
+          assert fixture.read_bytes() == header + body, 'Artifact proof byte mismatch'
+          print('Separate artifact bytes and exact run/attempt binding verified')
+          PY
