@@ -1,0 +1,74 @@
+name: Flow Vite build comparison
+on:
+  push:
+    branches: [proof/flow-vite8]
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    name: ${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: vite5
+            ref: c0cfc7678b096b2d5bedd7d6eae90a2cb02a2104
+          - case: vite8
+            ref: 9a97df6cd4bb91820df0d47cc296077d36956879
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Yarn
+        run: npm install --global yarn@1.22.22
+      - name: Install Flow dependencies
+        run: yarn --cwd flow install --frozen-lockfile --non-interactive
+      - name: Measure three production builds and validate asset references
+        run: |
+          python3 - <<'BENCHMARK'
+          import subprocess,time,json,re,gzip,statistics,os
+          from pathlib import Path
+          root=Path.cwd()
+          logs=Path(os.environ['RUNNER_TEMP'])/'flow-benchmark'
+          logs.mkdir()
+          runs=[]
+          for i in range(3):
+              start=time.monotonic()
+              p=subprocess.run(['/usr/bin/time','-v','yarn','build'],cwd=root/'flow',capture_output=True,text=True)
+              wall=time.monotonic()-start
+              output=p.stdout+p.stderr
+              (logs/f'build-{i+1}.log').write_text(output)
+              if p.returncode:
+                  print(output)
+                  raise SystemExit(p.returncode)
+              rss=re.search(r'Maximum resident set size \(kbytes\): (\d+)',output)
+              bundler=re.search(r'built in ([\d.]+)(ms|s)',output)
+              runs.append({'wall_s':round(wall,3),'bundler_s':float(bundler[1])/(1000 if bundler[2]=='ms' else 1),'peak_rss_mib':round(int(rss[1])/1024,1)})
+              print('Build',i+1,runs[-1],flush=True)
+          out=root/'frappe/public/flow'
+          sizes={}
+          for suffix in ('.js','.css'):
+              files=list(out.rglob('*'+suffix))
+              sizes[suffix]={'files':len(files),'raw_bytes':sum(f.stat().st_size for f in files),'gzip_bytes':sum(len(gzip.compress(f.read_bytes(),mtime=0)) for f in files)}
+          html=(root/'frappe/www/flow/index.html').read_text()
+          assert html==(out/'index.html').read_text()
+          refs=re.findall(r'(?:src|href)="(/assets/frappe/flow/[^"]+)"',html)
+          assert refs
+          for ref in refs:
+              assert (out/ref.removeprefix('/assets/frappe/flow/')).is_file(),ref
+          result={'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'node':subprocess.check_output(['node','--version'],text=True).strip(),'vite':subprocess.check_output(['node','-p','require("./node_modules/vite/package.json").version'],cwd=root/'flow',text=True).strip(),'cpus':len(os.sched_getaffinity(0)),'runs':runs,'median_wall_s':statistics.median(r['wall_s'] for r in runs),'median_peak_rss_mib':statistics.median(r['peak_rss_mib'] for r in runs),'sizes':sizes,'html_entry_assets_valid':len(refs)}
+          (logs/'metrics.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          BENCHMARK
+      - name: Run Flow frontend tests
+        run: yarn --cwd flow test
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: flow-build-${{ matrix.case }}
+          path: ${{ runner.temp }}/flow-benchmark/
