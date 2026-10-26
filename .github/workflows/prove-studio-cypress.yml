@@ -1,0 +1,61 @@
+name: Prove Studio Cypress installation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: ${{ matrix.case }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: baseline
+            ref: b1b09338caef135011efbf9a3dc8390fd6d02d31
+            expected: "true"
+          - case: fixed
+            ref: a9c665762079f3c0182f3b3077a1b60f9e86c077
+            expected: "false"
+    env:
+      CYPRESS_CACHE_FOLDER: ${{ runner.temp }}/studio-cypress-cache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Yarn
+        run: npm install --global yarn@1.22.22
+      - name: Install Studio dependencies
+        working-directory: studio/frontend
+        run: |
+          yarn install --frozen-lockfile --non-interactive > "$RUNNER_TEMP/studio-install.log" 2>&1
+      - name: Prove whether the browser binary was installed
+        working-directory: studio/frontend
+        env:
+          EXPECTED_BINARY: ${{ matrix.expected }}
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const assert = require('node:assert/strict');
+          const version = require('cypress/package.json').version;
+          const binary = path.join(process.env.CYPRESS_CACHE_FOLDER, version, 'Cypress', 'Cypress');
+          const installed = fs.existsSync(binary);
+          console.log('Cypress npm package installed:', version);
+          console.log('Cypress browser executable exists:', installed);
+          console.log('Browser executable path:', binary);
+          assert.equal(installed, process.env.EXPECTED_BINARY === 'true');
+          JS
+          if [ -d "$CYPRESS_CACHE_FOLDER" ]; then du -sh "$CYPRESS_CACHE_FOLDER"; fi
+      - name: Show installer output
+        if: always()
+        run: tail -80 "$RUNNER_TEMP/studio-install.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: studio-install-${{ matrix.case }}
+          path: ${{ runner.temp }}/studio-install.log
