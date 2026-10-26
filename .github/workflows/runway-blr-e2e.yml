@@ -1,9 +1,9 @@
-name: Runway regional cache single-attempt integration
+name: Runway regional cache two-job proof
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: runway-blr-development-20261024-managed-cache-single
+  group: runway-blr-development-20261024-managed-cache
   cancel-in-progress: false
 env:
   CACHE_KEY: runway-managed-cache-v1-${{ github.run_id }}-${{ github.run_attempt }}
@@ -11,39 +11,54 @@ defaults:
   run:
     shell: bash
 jobs:
-  cache:
-    name: Regional cache cold save and exact restore
+  save:
+    name: Cold restore and implicit post save
     runs-on: runway-blr-development-20261024
     timeout-minutes: 15
     steps:
     - name: Require approved scope and empty local paths
-      run: "python3 - <<'PY'\nimport os\nfrom pathlib import Path\n\nassert os.environ['GITHUB_REPOSITORY'] == 'BreadGenie/frappe'\n\
-        assert os.environ['GITHUB_REF'] == 'refs/heads/runway-blr-e2e-20261025'\nassert os.environ['GITHUB_EVENT_NAME'] ==\
-        \ 'workflow_dispatch'\nassert os.environ['CACHE_KEY'] == (\n    'runway-managed-cache-v1-'\n    + os.environ['GITHUB_RUN_ID']\
+      run: "python3 - <<'PY'\nimport os\nfrom pathlib import Path\n\nassert os.environ['GITHUB_REPOSITORY']\
+        \ == 'BreadGenie/frappe'\nassert os.environ['GITHUB_REF'] == 'refs/heads/runway-blr-e2e-20261025'\n\
+        assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'\nassert os.environ['CACHE_KEY']\
+        \ == (\n    'runway-managed-cache-v1-'\n    + os.environ['GITHUB_RUN_ID']\
         \ + '-' + os.environ['GITHUB_RUN_ATTEMPT']\n)\nassert not (Path.home() / '.runway-managed-ci/cache-v1').exists()\n\
-        assert not (Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof').exists()\nPY\n"
+        assert not (Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof').exists()\n\
+        PY\n"
     - name: Restore unique cold key and register official post save
-      id: cold
-      uses: actions/cache/restore@v4
+      id: cache
+      uses: actions/cache@v4
       with:
         path: ~/.runway-managed-ci/cache-v1
         key: ${{ env.CACHE_KEY }}
         enableCrossOsArchive: false
+    - name: Require the native regional cache route after setup
+      run: "python3 - <<'CACHECHECK'\nimport os\nimport urllib.parse\nimport urllib.request\n\
+        \nquery = urllib.parse.urlencode({'keys': os.environ['CACHE_KEY'], 'version':\
+        \ 'regional-readiness-probe-v1'})\nrequest = urllib.request.Request('http://127.0.0.1:18080/_apis/artifactcache/cache?'\
+        \ + query)\nopener = urllib.request.build_opener(urllib.request.ProxyHandler({}))\n\
+        with opener.open(request, timeout=10) as response:\n    assert response.status\
+        \ == 204 and response.read(1) == b'', 'Regional cache route must be active\
+        \ and cold'\nprint('Regional cache route answered the bounded cold probe')\n\
+        CACHECHECK\n"
     - name: Require miss and write deterministic cache and separate artifact proof
       env:
-        CACHE_HIT: ${{ steps.cold.outputs.cache-hit }}
-      run: "python3 - <<'PY'\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\n\nassert os.environ['CACHE_HIT']\
-        \ != 'true', 'First restore must miss'\nsize = 2 * 1024 * 1024\ndigest = '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc'\n\
-        payload = hashlib.shake_256(b'runway-managed-ci/cache-fixture/v1\\x00').digest(size)\nassert hashlib.sha256(payload).hexdigest()\
-        \ == digest\ncache = Path.home() / '.runway-managed-ci/cache-v1'\ncache.mkdir(parents=True, exist_ok=False)\n(cache\
-        \ / 'payload.bin').write_bytes(payload)\n\n# This directory is outside the cached path; no cached checksum is trusted.\n\
-        proof = Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof'\nproof.mkdir(exist_ok=False)\nmetadata = {\n \
-        \   'schema': 1,\n    'repository': os.environ['GITHUB_REPOSITORY'],\n    'ref': os.environ['GITHUB_REF'],\n    'run_id':\
-        \ os.environ['GITHUB_RUN_ID'],\n    'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],\n    'cache_key': os.environ['CACHE_KEY'],\n\
-        \    'payload_size': size,\n    'payload_sha256': digest,\n}\nheader = json.dumps(metadata, sort_keys=True, separators=(',',\
-        \ ':')).encode() + b'\\n'\nbody = hashlib.shake_256(b'runway-managed-ci/artifact-proof/v1\\x00').digest(4096)\n(proof\
-        \ / 'proof.bin').write_bytes(header + body)\nprint('Generated 2097152 deterministic cache bytes and separate artifact\
-        \ proof')\nPY\n"
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: "python3 - <<'PY'\nimport hashlib\nimport json\nimport os\nfrom pathlib\
+        \ import Path\n\nassert os.environ['CACHE_HIT'] != 'true', 'First restore\
+        \ must miss'\nsize = 2 * 1024 * 1024\ndigest = '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc'\n\
+        payload = hashlib.shake_256(b'runway-managed-ci/cache-fixture/v1\\x00').digest(size)\n\
+        assert hashlib.sha256(payload).hexdigest() == digest\ncache = Path.home()\
+        \ / '.runway-managed-ci/cache-v1'\ncache.mkdir(parents=True, exist_ok=False)\n\
+        (cache / 'payload.bin').write_bytes(payload)\n\n# This directory is outside\
+        \ the cached path; no cached checksum is trusted.\nproof = Path(os.environ['RUNNER_TEMP'])\
+        \ / 'runway-managed-ci-proof'\nproof.mkdir(exist_ok=False)\nmetadata = {\n\
+        \    'schema': 1,\n    'repository': os.environ['GITHUB_REPOSITORY'],\n  \
+        \  'ref': os.environ['GITHUB_REF'],\n    'run_id': os.environ['GITHUB_RUN_ID'],\n\
+        \    'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],\n    'cache_key': os.environ['CACHE_KEY'],\n\
+        \    'payload_size': size,\n    'payload_sha256': digest,\n}\nheader = json.dumps(metadata,\
+        \ sort_keys=True, separators=(',', ':')).encode() + b'\\n'\nbody = hashlib.shake_256(b'runway-managed-ci/artifact-proof/v1\\\
+        x00').digest(4096)\n(proof / 'proof.bin').write_bytes(header + body)\nprint('Generated\
+        \ 2097152 deterministic cache bytes and separate artifact proof')\nPY\n"
     - name: Upload separate proof using original Results service
       uses: actions/upload-artifact@v7
       with:
@@ -52,42 +67,50 @@ jobs:
         if-no-files-found: error
         retention-days: 1
         compression-level: 0
-    - name: Save through unchanged official cache client
-      uses: actions/cache/save@v4
-      with:
-        path: ~/.runway-managed-ci/cache-v1
-        key: ${{ env.CACHE_KEY }}
-        enableCrossOsArchive: false
-    - name: Delete only generated fixture and artifact proof before independent restore
+  restore:
+    name: Exact cache hit and artifact byte verification
+    needs: save
+    runs-on: runway-blr-development-20261024
+    timeout-minutes: 15
+    steps:
+    - name: Require empty local paths on the second runner
       run: 'python3 - <<''PY''
 
-        import os,shutil
+        import os
 
         from pathlib import Path
 
-        cache=Path.home()/''.runway-managed-ci/cache-v1''
 
-        assert set(p.name for p in cache.iterdir())=={''payload.bin''}
+        assert os.environ[''GITHUB_REPOSITORY''] == ''BreadGenie/frappe''
 
-        shutil.rmtree(cache)
+        assert os.environ[''GITHUB_REF''] == ''refs/heads/runway-blr-e2e-20261025''
 
-        proof=Path(os.environ[''RUNNER_TEMP''])/''runway-managed-ci-proof''
+        assert os.environ[''GITHUB_EVENT_NAME''] == ''workflow_dispatch''
 
-        assert set(p.name for p in proof.iterdir())=={''proof.bin''}
+        assert not (Path.home() / ''.runway-managed-ci/cache-v1'').exists()
 
-        shutil.rmtree(proof)
+        assert not (Path(os.environ[''RUNNER_TEMP'']) / ''runway-managed-ci-proof'').exists()
 
         PY
 
         '
     - name: Restore exact key with the same path and cache version inputs
       id: cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache@v4
       with:
         path: ~/.runway-managed-ci/cache-v1
         key: ${{ env.CACHE_KEY }}
         enableCrossOsArchive: false
         fail-on-cache-miss: true
+    - name: Require the native regional cache route after setup
+      run: "python3 - <<'CACHECHECK'\nimport os\nimport urllib.parse\nimport urllib.request\n\
+        \nquery = urllib.parse.urlencode({'keys': os.environ['CACHE_KEY'], 'version':\
+        \ 'regional-readiness-probe-v1'})\nrequest = urllib.request.Request('http://127.0.0.1:18080/_apis/artifactcache/cache?'\
+        \ + query)\nopener = urllib.request.build_opener(urllib.request.ProxyHandler({}))\n\
+        with opener.open(request, timeout=10) as response:\n    assert response.status\
+        \ == 204 and response.read(1) == b'', 'Regional cache route must be active\
+        \ and cold'\nprint('Regional cache route answered the bounded cold probe')\n\
+        CACHECHECK\n"
     - name: Require exact hit and verify independent expected digest and every byte
       env:
         CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
@@ -100,7 +123,8 @@ jobs:
         from pathlib import Path
 
 
-        assert os.environ[''CACHE_HIT''] == ''true'', ''Second restore must be an exact hit''
+        assert os.environ[''CACHE_HIT''] == ''true'', ''Second restore must be an
+        exact hit''
 
         cache = Path.home() / ''.runway-managed-ci/cache-v1''
 
@@ -116,9 +140,11 @@ jobs:
 
         expected_digest = ''187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc''
 
-        assert hashlib.sha256(actual).hexdigest() == expected_digest, ''Cache digest mismatch''
+        assert hashlib.sha256(actual).hexdigest() == expected_digest, ''Cache digest
+        mismatch''
 
-        expected = hashlib.shake_256(b''runway-managed-ci/cache-fixture/v1\x00'').digest(2 * 1024 * 1024)
+        expected = hashlib.shake_256(b''runway-managed-ci/cache-fixture/v1\x00'').digest(2
+        * 1024 * 1024)
 
         assert actual == expected, ''Cache byte mismatch''
 
@@ -133,14 +159,19 @@ jobs:
         name: runway-managed-proof-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/runway-managed-ci-proof
     - name: Verify every artifact proof byte and exact attempt binding
-      run: "python3 - <<'PY'\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\n\nmetadata = {\n    'schema':\
-        \ 1,\n    'repository': 'BreadGenie/frappe',\n    'ref': 'refs/heads/runway-blr-e2e-20261025',\n    'run_id': os.environ['GITHUB_RUN_ID'],\n\
-        \    'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],\n    'cache_key': 'runway-managed-cache-v1-' + os.environ['GITHUB_RUN_ID']\n\
-        \        + '-' + os.environ['GITHUB_RUN_ATTEMPT'],\n    'payload_size': 2 * 1024 * 1024,\n    'payload_sha256': '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc',\n\
-        }\nheader = json.dumps(metadata, sort_keys=True, separators=(',', ':')).encode() + b'\\n'\nbody = hashlib.shake_256(b'runway-managed-ci/artifact-proof/v1\\\
-        x00').digest(4096)\nproof = Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof'\nassert set(p.name for p in\
-        \ proof.iterdir()) == {'proof.bin'}\nfixture = proof / 'proof.bin'\nassert not fixture.is_symlink() and fixture.is_file()\n\
-        assert fixture.stat().st_size == len(header) + len(body)\nassert fixture.read_bytes() == header + body, 'Artifact\
-        \ proof byte mismatch'\nprint('Separate artifact bytes and exact run/attempt binding verified')\nPY\n"
+      run: "python3 - <<'PY'\nimport hashlib\nimport json\nimport os\nfrom pathlib\
+        \ import Path\n\nmetadata = {\n    'schema': 1,\n    'repository': 'BreadGenie/frappe',\n\
+        \    'ref': 'refs/heads/runway-blr-e2e-20261025',\n    'run_id': os.environ['GITHUB_RUN_ID'],\n\
+        \    'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],\n    'cache_key': 'runway-managed-cache-v1-'\
+        \ + os.environ['GITHUB_RUN_ID']\n        + '-' + os.environ['GITHUB_RUN_ATTEMPT'],\n\
+        \    'payload_size': 2 * 1024 * 1024,\n    'payload_sha256': '187aec0246455aacdfd752d86fe9c84bbe92e5f71eb6104da6e4e875f6803bbc',\n\
+        }\nheader = json.dumps(metadata, sort_keys=True, separators=(',', ':')).encode()\
+        \ + b'\\n'\nbody = hashlib.shake_256(b'runway-managed-ci/artifact-proof/v1\\\
+        x00').digest(4096)\nproof = Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof'\n\
+        assert set(p.name for p in proof.iterdir()) == {'proof.bin'}\nfixture = proof\
+        \ / 'proof.bin'\nassert not fixture.is_symlink() and fixture.is_file()\nassert\
+        \ fixture.stat().st_size == len(header) + len(body)\nassert fixture.read_bytes()\
+        \ == header + body, 'Artifact proof byte mismatch'\nprint('Separate artifact\
+        \ bytes and exact run/attempt binding verified')\nPY\n"
 'on':
   workflow_dispatch: null
