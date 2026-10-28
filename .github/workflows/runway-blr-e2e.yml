@@ -22,6 +22,47 @@ jobs:
         \ 'workflow_dispatch'\nassert os.environ['CACHE_KEY'] == (\n    'runway-managed-cache-v1-'\n    + os.environ['GITHUB_RUN_ID']\
         \ + '-' + os.environ['GITHUB_RUN_ATTEMPT']\n)\nassert not (Path.home() / '.runway-managed-ci/cache-v1').exists()\n\
         assert not (Path(os.environ['RUNNER_TEMP']) / 'runway-managed-ci-proof').exists()\nPY\n"
+    - name: Prepare unique setup-node Yarn cache namespace
+      run: |
+        python3 - <<'PYSETUP'
+        import os, subprocess
+        from pathlib import Path
+        identity = os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+        cache = Path(os.environ['RUNNER_TEMP']) / ('runway-managed-setup-node-' + identity)
+        assert not cache.exists()
+        with open(os.environ['GITHUB_ENV'], 'a') as environment:
+            environment.write('YARN_CACHE_FOLDER=' + str(cache) + '\n')
+        lockdir = Path(os.environ['GITHUB_WORKSPACE']) / '.runway-managed-setup-node'
+        assert not lockdir.exists()
+        lockdir.mkdir()
+        identity = os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT']
+        (lockdir / 'yarn.lock').write_text('# yarn lockfile v1\n# runway-managed-setup-node-' + identity + '\n')
+        assert subprocess.check_output(['yarn', '--version'], text=True).strip() == '1.22.22'
+        print('Using baked Node and Yarn; no tool or dependency installation')
+        PYSETUP
+    - name: Restore Yarn cache through unchanged official setup-node
+      id: setupnode
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      with:
+        cache: yarn
+        cache-dependency-path: .runway-managed-setup-node/yarn.lock
+    - name: Require setup-node miss and seed bounded Yarn post-save bytes
+      env:
+        SETUP_NODE_CACHE_HIT: ${{ steps.setupnode.outputs.cache-hit }}
+      run: |
+        python3 - <<'PYYARN'
+        import hashlib, os, subprocess
+        from pathlib import Path
+        assert os.environ['SETUP_NODE_CACHE_HIT'] != 'true', 'Unique setup-node Yarn cache must miss'
+        prefix = Path(os.environ['YARN_CACHE_FOLDER']).resolve()
+        cache = Path(subprocess.check_output(['yarn', 'cache', 'dir'], text=True).strip()).resolve()
+        assert cache.is_relative_to(prefix) and cache != prefix.parent
+        cache.mkdir(parents=True, exist_ok=True)
+        assert not any(p.is_file() or p.is_symlink() for p in cache.rglob('*'))
+        payload = hashlib.shake_256(b'runway-managed-ci/setup-node-yarn/v1\x00').digest(131072)
+        (cache / 'runway-setup-node-proof.bin').write_bytes(payload)
+        print('setup-node Yarn post-save fixture: 131072 bytes, SHA256 ' + hashlib.sha256(payload).hexdigest())
+        PYYARN
     - name: Restore unique cold key through unchanged official client
       id: cold
       uses: actions/cache/restore@v4
