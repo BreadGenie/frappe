@@ -156,11 +156,13 @@ async function execute() {
 	if (RUN_BUILD_COMMAND) {
 		await run_build_command_for_apps(APPS);
 		if (APPS.includes("frappe")) {
-			await run_frontend_build(
-				"studio",
-				path.resolve(__dirname, "..", "studio", "frontend")
+			await run_with_concurrency(
+				[
+					() => run_frontend_build("studio", path.resolve(__dirname, "..", "studio", "frontend")),
+					() => run_frontend_build("flow", path.resolve(__dirname, "..", "flow")),
+				],
+				get_build_concurrency(2)
 			);
-			await run_frontend_build("flow", path.resolve(__dirname, "..", "flow"));
 		}
 	}
 	if (!WATCH_MODE) {
