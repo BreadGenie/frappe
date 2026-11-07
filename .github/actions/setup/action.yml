@@ -86,8 +86,10 @@ runs:
         # The mariadb server runs as a service container; the client tools come
         # from ubuntu's archives so CI does not depend on mariadb.com mirrors.
 
-        sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-        wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+        # apt-key is gone from newer Ubuntu; pin the pgdg key to its own list, as upstream does.
+        sudo install -d /usr/share/postgresql-common/pgdg
+        sudo curl -fsSL --retry 3 --retry-all-errors -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
 
         sudo apt -qq update
         sudo apt -qq remove mysql-server mysql-client
@@ -95,10 +97,16 @@ runs:
         sudo apt -qq install libcups2-dev redis-server mariadb-client libmariadb-dev postgresql-client-18 libpq-dev
         echo "/usr/lib/postgresql/18/bin" >> $GITHUB_PATH
 
-        if [ ! -f /tmp/wkhtmltox.deb ]; then
-          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
-        fi
-        sudo apt install /tmp/wkhtmltox.deb
+        # The jammy package is built for jammy and noble; newer runners (Migration on
+        # ubuntu-latest) do not render PDFs and skip it.
+        case "$(lsb_release -cs)" in
+          jammy|noble)
+            if [ ! -f /tmp/wkhtmltox.deb ]; then
+              wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+            fi
+            sudo apt install /tmp/wkhtmltox.deb ;;
+          *) echo "skipping wkhtmltox on $(lsb_release -cs)" ;;
+        esac
       }
 
       install_system_deps &> ${GITHUB_WORKSPACE}/system_deps.log &
