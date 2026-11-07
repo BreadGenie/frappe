@@ -240,7 +240,8 @@ jobs:
         with:
           name: Server
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          # The fork has no Codecov token and Codecov refuses tokenless fork uploads.
+          fail_ci_if_error: false
           verbose: true
           flags: server
 
