@@ -1,5 +1,4 @@
 """Rerun the unchanged CI shard only for ticket 08's two accepted flakes."""
-import os
 import re
 import subprocess
 import sys
