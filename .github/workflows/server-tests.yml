@@ -3,6 +3,12 @@ name: Server
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      qualification:
+        description: Ticket 08 qualification phase
+        type: choice
+        options: [server, early, warm, fallback, recreated]
+        default: server
   schedule:
     # Run everday at midnight UTC / 5:30 IST
     - cron: "0 0 * * *"
@@ -17,6 +23,7 @@ permissions:
 
 jobs:
   checkrun:
+    if: ${{ !inputs.qualification || inputs.qualification == 'server' }}
     name: Plan Tests
     runs-on: ubuntu-latest
     outputs:
@@ -268,3 +275,33 @@ jobs:
           if all(r in dopass for r in stati):
             exit(0)
           exit(1)
+
+  cache-qualification:
+    if: ${{ inputs.qualification && inputs.qualification != 'server' }}
+    name: Cache qualification ${{ inputs.qualification }}
+    runs-on: runway-cache-blr-development-20261026
+    timeout-minutes: 15
+    steps:
+      - name: Wait for started evidence except in the early qualification
+        if: ${{ inputs.qualification != 'early' }}
+        run: sleep 55
+      - uses: actions/checkout@v6
+        with:
+          path: frappe-src
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: frappe-src/yarn.lock
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/requirements*.txt
+      - name: Verify tools and hold for isolated lifecycle probes
+        run: |
+          node --version
+          yarn --version
+          uv --version
+          sleep 300
