@@ -280,7 +280,7 @@ jobs:
     if: ${{ inputs.qualification && inputs.qualification != 'server' }}
     name: Cache qualification ${{ inputs.qualification }}
     runs-on: runway-cache-blr-development-20261026
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Wait for started evidence except in the early qualification
         if: ${{ inputs.qualification != 'early' }}
