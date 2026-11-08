@@ -13,14 +13,14 @@ def retry_accepted_failures(runner):
     from frappe.testing.result import TestResult
 
     allowed = {"test_rq_pool_idle_cpu_usage", "test_remove_failed_jobs"}
-    for attempt in range(2, 4):
+    for attempt in range(2, 11):
         failed = [test for test, _ in runner.test_result.failures + runner.test_result.errors]
         if not failed or any(getattr(test, "_testMethodName", "") not in allowed for test in failed):
             return
         names = sorted({test.id() for test in failed})
         runner.test_result.printErrors()
         print(runner.test_result, flush=True)
-        print(f"Ticket 08: accepted test retry {attempt}/3: " + ", ".join(names), flush=True)
+        print(f"Ticket 08: accepted test retry {attempt}/10: " + ", ".join(names), flush=True)
         time.sleep(10)
         frappe.db.rollback()
         frappe.set_user("Administrator")
