@@ -286,6 +286,7 @@ jobs:
         if: ${{ inputs.qualification != 'early' }}
         run: sleep 55
       - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           path: frappe-src
       - uses: actions/setup-node@v6
