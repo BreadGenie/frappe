@@ -1,8 +1,10 @@
 import logging
 import time
 from datetime import timedelta
+from unittest.mock import patch
 
 import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.tests import IntegrationTestCase
 from frappe.tests.utils.generators import get_missing_records_doctypes, get_modules
 from frappe.utils.data import now_datetime
@@ -83,6 +85,36 @@ class TestTestUtils(IntegrationTestCase):
 			any("Definitely Not A Real DocType" in line for line in log_ctx.output),
 			f"Expected warning mentioning the missing doctype, got: {log_ctx.output}",
 		)
+
+	def test_get_missing_records_doctypes_skips_custom_links(self):
+		self.addCleanup(get_modules.cache_clear)
+		for doctype in ("Email Account", "User Email"):
+			with self.subTest(doctype=doctype):
+				custom_field = create_custom_field(
+					doctype,
+					{
+						"fieldname": "test_record_dependency",
+						"label": "Test Record Dependency",
+						"fieldtype": "Link",
+						"options": "Note",
+					},
+				)
+				try:
+					self.assertTrue(
+						frappe.get_meta(doctype).get_field("test_record_dependency").is_custom_field
+					)
+					dependencies = get_missing_records_doctypes("User")
+					self.assertIn("Email Account", dependencies)
+					self.assertNotIn("Note", dependencies)
+
+					_, test_module = get_modules("User")
+					with patch.object(test_module, "EXTRA_TEST_RECORD_DEPENDENCIES", ["Note"], create=True):
+						dependencies = get_missing_records_doctypes("User")
+					self.assertIn("Note", dependencies)
+					self.assertLess(dependencies.index("Note"), dependencies.index("User"))
+				finally:
+					custom_field.delete()
+					frappe.clear_cache(doctype=doctype)
 
 
 class TestCompatAssertQueryCount(IntegrationTestCase):

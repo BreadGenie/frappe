@@ -84,7 +84,9 @@ def get_missing_records_doctypes(doctype, visited=None, _parent=None) -> list[st
 	for df in meta.get_table_fields():
 		link_fields.extend(frappe.get_meta(df.options).get_link_fields())
 
-	unique_doctypes = dict.fromkeys(df.options for df in link_fields if df.options != "[Select]")
+	unique_doctypes = dict.fromkeys(
+		df.options for df in link_fields if df.options != "[Select]" and not df.get("is_custom_field")
+	)
 
 	to_add, to_remove = get_missing_records_module_overrides(test_module)
 	unique_doctypes.update(dict.fromkeys(to_add))
