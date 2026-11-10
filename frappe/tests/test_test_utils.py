@@ -90,15 +90,18 @@ class TestTestUtils(IntegrationTestCase):
 		self.addCleanup(get_modules.cache_clear)
 		for doctype in ("Email Account", "User Email"):
 			with self.subTest(doctype=doctype):
-				custom_field = create_custom_field(
-					doctype,
-					{
-						"fieldname": "test_record_dependency",
-						"label": "Test Record Dependency",
-						"fieldtype": "Link",
-						"options": "Note",
-					},
-				)
+				# Avoid DDL commits; dependency discovery only needs metadata.
+				with patch.dict(frappe.flags, in_create_custom_fields=True):
+					custom_field = create_custom_field(
+						doctype,
+						{
+							"fieldname": "test_record_dependency",
+							"label": "Test Record Dependency",
+							"fieldtype": "Link",
+							"options": "Note",
+						},
+					)
+				frappe.clear_cache(doctype=doctype)
 				try:
 					self.assertTrue(
 						frappe.get_meta(doctype).get_field("test_record_dependency").is_custom_field
