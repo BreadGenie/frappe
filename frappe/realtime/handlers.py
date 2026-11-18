@@ -5,7 +5,7 @@ import json
 
 import redis.asyncio
 
-from frappe.realtime import Socket, realtime
+from frappe.realtime import Socket, get_task_progress_room, realtime
 from frappe.realtime.config import get_config
 
 WEBSITE_ROOM = "website"
@@ -22,10 +22,6 @@ def doctype_room(doctype: str) -> str:
 
 def doc_room(doctype: str, docname: str) -> str:
 	return f"doc:{doctype}/{docname}"
-
-
-def task_room(task_id: str) -> str:
-	return f"task_progress:{task_id}"
 
 
 def open_doc_room(doctype: str, docname: str) -> str:
@@ -57,19 +53,16 @@ async def doctype_unsubscribe(socket: Socket, doctype: str) -> None:
 	await socket.leave(doctype_room(doctype))
 
 
-@realtime.on("task_subscribe", allow_guest=True)
+@realtime.on("progress_subscribe")
+@realtime.on("task_subscribe")
 async def task_subscribe(socket: Socket, task_id: str) -> None:
-	await socket.join(task_room(task_id))
+	if socket.user != "Guest":
+		await socket.join(get_task_progress_room(task_id, user=socket.user))
 
 
-@realtime.on("task_unsubscribe", allow_guest=True)
+@realtime.on("task_unsubscribe")
 async def task_unsubscribe(socket: Socket, task_id: str) -> None:
-	await socket.leave(task_room(task_id))
-
-
-@realtime.on("progress_subscribe", allow_guest=True)
-async def progress_subscribe(socket: Socket, task_id: str) -> None:
-	await socket.join(task_room(task_id))
+	await socket.leave(get_task_progress_room(task_id, user=socket.user))
 
 
 @realtime.on("doc_subscribe", allow_guest=True)

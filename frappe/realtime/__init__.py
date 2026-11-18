@@ -180,8 +180,12 @@ def get_site_room():
 	return "all"
 
 
-def get_task_progress_room(task_id):
-	return f"task_progress:{task_id}"
+def get_task_progress_room(task_id, *, user: str | None = None):
+	if user is None:
+		job = getattr(frappe.local, "job", None)
+		user = getattr(job, "user", None) or frappe.session.user
+	user_key = user.replace("%", "%25").replace(":", "%3A")
+	return f"task_progress:{user_key}:{task_id}"
 
 
 def get_website_room():
@@ -211,7 +215,7 @@ def publish_to_doctype(doctype: str, event: str, message: dict | None = None, *,
 
 
 def publish_task_progress(task_id: str, message: dict | None = None, *, after_commit: bool = False):
-	"""Publish task progress to task_progress:{task_id}."""
+	"""Publish progress to the room scoped to the task owner."""
 	publish_realtime(message=message, task_id=task_id, after_commit=after_commit)
 
 

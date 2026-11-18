@@ -45,19 +45,19 @@ function frappe_handlers(socket) {
 		socket.leave(doctype_room(doctype));
 	});
 
-	socket.on("task_subscribe", function (task_id) {
-		const room = task_room(task_id);
-		socket.join(room);
-	});
+	const subscribe_to_task = (task_id) => {
+		if (socket.user && socket.user !== "Guest") {
+			socket.join(task_room(socket.user, task_id));
+		}
+	};
 
-	socket.on("task_unsubscribe", function (task_id) {
-		const room = task_room(task_id);
-		socket.leave(room);
-	});
+	socket.on("task_subscribe", subscribe_to_task);
+	socket.on("progress_subscribe", subscribe_to_task);
 
-	socket.on("progress_subscribe", function (task_id) {
-		const room = task_room(task_id);
-		socket.join(room);
+	socket.on("task_unsubscribe", (task_id) => {
+		if (socket.user && socket.user !== "Guest") {
+			socket.leave(task_room(socket.user, task_id));
+		}
 	});
 
 	socket.on("doc_subscribe", function (doctype, docname) {
@@ -160,6 +160,9 @@ const doc_room = (doctype, docname) => "doc:" + doctype + "/" + docname;
 const open_doc_room = (doctype, docname) => "open_doc:" + doctype + "/" + docname;
 const user_room = (user) => "user:" + user;
 const doctype_room = (doctype) => "doctype:" + doctype;
-const task_room = (task_id) => "task_progress:" + task_id;
+const task_room = (user, task_id) => {
+	const user_key = user.replaceAll("%", "%25").replaceAll(":", "%3A");
+	return `task_progress:${user_key}:${task_id}`;
+};
 
 module.exports = frappe_handlers;

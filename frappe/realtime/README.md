@@ -163,7 +163,7 @@ Room mapping:
 | `publish_to_user`       | `user:{user}`              | all of that user's sockets on this site      |
 | `publish_to_doc`        | `doc:{doctype}/{docname}`  | sockets subscribed to that document          |
 | `publish_to_doctype`    | `doctype:{doctype}`        | sockets subscribed to that doctype           |
-| `publish_task_progress` | `task_progress:{task_id}`  | sockets watching that task (fires `task_progress`) |
+| `publish_task_progress` | `task_progress:<user>:<task_id>` | the task owner's subscribed sockets (fires `task_progress`) |
 | `publish_to_website`    | `website`                  | every socket on this site                    |
 | `publish_to_all`        | `all`                      | **System Users of this site** (not Guests)   |
 | `publish_to_room`       | `{room}`                   | whatever room string you pass                |

@@ -1058,6 +1058,49 @@ class TestCoreHandlers(unittest.IsolatedAsyncioTestCase):
 		await handlers_mod.doctype_subscribe(deny, "ToDo")
 		self.assertNotIn("doctype:ToDo", sio2.rooms_of("sid1"))
 
+	async def test_task_progress_delivered_only_to_the_job_owner(self):
+		import frappe
+		from frappe.realtime import publish_progress
+
+		for event_name in ("task_subscribe", "progress_subscribe"):
+			with self.subTest(event=event_name):
+				sio = FakeSio()
+				for sid, user in (
+					("owner", "owner@example.com"),
+					("other", "other@example.com"),
+					("guest", "Guest"),
+				):
+					session = make_session(user=user)
+					sio.sessions[sid] = session
+					await dispatch_mod._run_handlers(sio, event_name, "/s1", sid, ("export:1",))
+
+				wire_events = []
+				redis = MagicMock()
+				redis.publish.side_effect = lambda channel, payload: wire_events.append(payload)
+				local = types.SimpleNamespace(site="s1", job=frappe._dict(user="owner@example.com"))
+				with (
+					patch.object(frappe, "local", local),
+					patch.object(frappe, "session", frappe._dict(user="worker@example.com")),
+					patch(
+						"frappe.utils.background_jobs.get_redis_connection_without_auth",
+						return_value=redis,
+					),
+				):
+					publish_progress(50, title="Exporting", task_id="export:1")
+
+				self.assertEqual(len(wire_events), 1)
+				await bridge_mod.RedisBridge(sio, "redis://x")._handle(wire_events[0])
+				self.assertEqual(len(sio.emits), 1)
+				event = sio.emits[0]
+				self.assertEqual(event["event"], "progress")
+				self.assertEqual(event["to"], "task_progress:owner@example.com:export:1")
+				self.assertEqual(event["data"]["percent"], 50)
+				self.assertEqual(event["data"]["task_id"], "export:1")
+				self.assertEqual(
+					list(sio.get_participants(event["namespace"], event["to"])), [("owner", "owner")]
+				)
+				self.assertEqual(sio.rooms_of("guest"), set())
+
 	async def test_doc_close_removes_tracked_pair(self):
 		# Regression for the Node bug: the pair must actually be dropped.
 		sio = FakeSio()
