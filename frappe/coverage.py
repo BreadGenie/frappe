@@ -84,10 +84,11 @@ class CodeCoverage:
 
 			self.coverage = Coverage(
 				source=[source_path],
-				omit=omit,
 				include=STANDARD_INCLUSIONS,
 				data_suffix=True,
 			)
+			self.coverage.set_option("run:omit", omit + self.coverage.get_option("run:omit"))
+			self.coverage.set_option("report:omit", omit + self.coverage.get_option("report:omit"))
 			self.coverage.start()
 		return self
 
