@@ -20,8 +20,10 @@ class SystemSettings(Document):
 	from typing import TYPE_CHECKING
 
 	if TYPE_CHECKING:
+		from frappe.core.doctype.mcp_access_role.mcp_access_role import MCPAccessRole
 		from frappe.types import DF
 
+		additional_mcp_roles: DF.TableMultiSelect[MCPAccessRole]
 		agent_instructions: DF.LongText | None
 		allow_clearing_link_fields: DF.Check
 		allow_consecutive_login_attempts: DF.Int

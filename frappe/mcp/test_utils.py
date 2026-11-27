@@ -17,15 +17,16 @@ class McpTestCase(IntegrationTestCase):
 		self.user, self.authorization = self.create_user("MCP Transport")
 		self.site = frappe.local.site
 
-	def create_user(self, first_name):
-		if not frappe.db.exists("Role", "MCP Desk Tester"):
-			frappe.get_doc(doctype="Role", role_name="MCP Desk Tester", desk_access=1).insert()
+	def create_user(self, first_name, *, desk_access=True):
+		role = "MCP Desk Tester" if desk_access else "MCP Website Tester"
+		if not frappe.db.exists("Role", role):
+			frappe.get_doc(doctype="Role", role_name=role, desk_access=int(desk_access)).insert()
 		user = frappe.get_doc(
 			doctype="User",
 			email=f"mcp.{frappe.generate_hash(length=10)}@example.com",
 			first_name=first_name,
 			send_welcome_email=0,
-			roles=[{"role": "MCP Desk Tester"}],
+			roles=[{"role": role}],
 		).insert()
 		self.addCleanup(self.delete_user, user.name)
 		keys = generate_keys(user.name)

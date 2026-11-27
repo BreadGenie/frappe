@@ -23,6 +23,7 @@ import frappe.utils.response
 from frappe import _
 from frappe.auth import SAFE_HTTP_METHODS, UNSAFE_HTTP_METHODS, HTTPRequest, check_request_ip, validate_auth
 from frappe.integrations.oauth2 import get_resource_url, handle_wellknown, is_oauth_metadata_enabled
+from frappe.mcp import access as mcp_access
 from frappe.middlewares import StaticDataMiddleware
 from frappe.permissions import handle_does_not_exist_error
 from frappe.utils import CallbackManager, cint, get_request_host, get_site_name
@@ -353,10 +354,12 @@ def set_cors_headers(response):
 
 
 def set_authenticate_headers(response: Response):
-	headers = {
-		"WWW-Authenticate": f'Bearer resource_metadata="{get_resource_url()}/.well-known/oauth-protected-resource"'
-	}
-	response.headers.update(headers)
+	metadata_url = f"{get_resource_url()}/.well-known/oauth-protected-resource"
+	scope = ""
+	if frappe.request.path == mcp_access.MCP_ENDPOINT and mcp_access.additional_roles():
+		metadata_url += mcp_access.MCP_ENDPOINT
+		scope = f', scope="{mcp_access.MCP_SCOPE}"'
+	response.headers["WWW-Authenticate"] = f'Bearer resource_metadata="{metadata_url}"{scope}'
 
 
 def make_form_dict(request: Request):

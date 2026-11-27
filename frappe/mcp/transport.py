@@ -13,9 +13,8 @@ from werkzeug.wrappers import Request, Response
 
 import frappe
 from frappe.auth import get_oauth_client_name, set_agent
-from frappe.mcp import protocol, server
+from frappe.mcp import access, protocol, server
 from frappe.mcp.protocol import McpError
-from frappe.permissions import SYSTEM_USER_ROLE
 
 
 @dataclass
@@ -35,8 +34,8 @@ def handle_request(request: Request) -> Response:
 	check_origin(request)
 	if frappe.session.user == "Guest":
 		raise McpError(protocol.INVALID_REQUEST, "Authentication required", status=401)
-	if SYSTEM_USER_ROLE not in frappe.get_roles():
-		raise McpError(protocol.INVALID_REQUEST, "MCP is only available to desk users", status=403)
+	if not access.allows(set(frappe.get_roles())):
+		raise McpError(protocol.INVALID_REQUEST, "Your roles do not allow MCP access", status=403)
 	if not request.is_json:
 		raise McpError(protocol.INVALID_REQUEST, "Content-Type must be application/json", status=415)
 	if not request.accept_mimetypes["application/json"]:

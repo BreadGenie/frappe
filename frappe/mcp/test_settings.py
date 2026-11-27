@@ -13,7 +13,9 @@ class TestSettings(McpTestCase):
 	@contextmanager
 	def settings(self, **values):
 		doc = frappe.get_doc("System Settings")
-		original = {field: doc.get(field) for field in ("enable_mcp", "server_name", "agent_instructions")}
+		original = {field: doc.get(field) for field in values}
+		if "additional_mcp_roles" in original:
+			original["additional_mcp_roles"] = [{"role": row.role} for row in doc.additional_mcp_roles]
 		try:
 			doc.update(values)
 			doc.save()
@@ -86,6 +88,32 @@ class TestSettings(McpTestCase):
 	def test_enable_setting_controls_endpoint_even_with_legacy_site_config(self):
 		with self.settings(enable_mcp=1), patch.dict(frappe.conf, {"disable_mcp_server": True}):
 			self.assertEqual(self.ping().status_code, 200)
+
+	def test_configured_website_role_can_use_document_tools(self):
+		_, authorization = self.create_user("MCP Website User", desk_access=False)
+		headers = {"Authorization": authorization}
+		with self.settings(enable_mcp=1, additional_mcp_roles=[]):
+			self.assertEqual(self.ping(headers=headers).status_code, 403)
+			self.assertEqual(self.ping().status_code, 200)
+
+		with self.settings(enable_mcp=1, additional_mcp_roles=[{"role": "MCP Website Tester"}]):
+			response = self.request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers)
+			self.assertEqual(response.status_code, 200)
+			tool_names = {tool["name"] for tool in response.json["result"]["tools"]}
+			self.assertIn("get_document", tool_names)
+			self.assertNotIn("call_method", tool_names)
+			self.assertNotIn("call_document_method", tool_names)
+			call = self.request(
+				{
+					"jsonrpc": "2.0",
+					"id": 2,
+					"method": "tools/call",
+					"params": {"name": "call_method", "arguments": {"method": "frappe.ping"}},
+				},
+				headers=headers,
+			)
+			self.assertEqual(call.status_code, 404)
+			self.assertEqual(call.json["error"]["code"], protocol.METHOD_NOT_FOUND)
 
 	def test_normal_user_cannot_change_settings(self):
 		doc = frappe.get_doc("System Settings")

@@ -12,6 +12,7 @@ from oauthlib.openid import RequestValidator
 import frappe
 from frappe.integrations.doctype.oauth_bearer_token.oauth_bearer_token import get_oauth_token_hash
 from frappe.integrations.doctype.oauth_client.oauth_client import OAuthClient
+from frappe.mcp import access
 from frappe.utils.data import add_to_date, cstr, get_system_timezone, get_url, now_datetime
 
 # RFC 6749 §4.1.2 recommends a maximum authorization code lifetime of 10 minutes.
@@ -309,6 +310,11 @@ class OAuthWebRequestValidator(RequestValidator):
 	def validate_bearer_token(self, token, scopes, request):
 		# Remember to check expiration and scope membership
 		otoken = frappe.get_doc("OAuth Bearer Token", {"access_token": get_oauth_token_hash(token)})
+		if access.MCP_SCOPE in otoken.scopes.split():
+			if frappe.request.path != access.MCP_ENDPOINT:
+				return False
+			if not frappe.get_cached_doc("OAuth Client", otoken.client).user_has_allowed_role(otoken.user):
+				return False
 		is_token_valid = (
 			now_datetime() < otoken.expiration_time
 			and otoken.status != "Revoked"

@@ -7,6 +7,7 @@ import time
 import frappe
 import frappe.utils
 from frappe import _
+from frappe.mcp import access
 from frappe.model.document import Document
 from frappe.permissions import SYSTEM_USER_ROLE
 from frappe.utils import add_to_date, now_datetime
@@ -53,7 +54,13 @@ class OAuthClient(Document):
 		if not self.client_secret:
 			self.client_secret = frappe.generate_hash()
 		self.validate_grant_and_response()
-		self.add_default_role()
+		scopes = (self.scopes or "").split()
+		if access.MCP_SCOPE in scopes:
+			if scopes != [access.MCP_SCOPE]:
+				frappe.throw(_("The MCP scope must be used by itself."))
+			self.scopes = access.MCP_SCOPE
+		else:
+			self.add_default_role()
 
 	def validate_grant_and_response(self):
 		if (self.grant_type == "Authorization Code" and self.response_type != "Code") or (
@@ -69,10 +76,13 @@ class OAuthClient(Document):
 		if not self.allowed_roles:
 			self.append("allowed_roles", {"role": SYSTEM_USER_ROLE})
 
-	def user_has_allowed_role(self) -> bool:
+	def user_has_allowed_role(self, user: str | None = None) -> bool:
 		"""Returns true if session user is allowed to use this client."""
 		allowed_roles = {d.role for d in self.allowed_roles}
-		return bool(allowed_roles & set(frappe.get_roles()))
+		user_roles = set(frappe.get_roles(user))
+		if self.scopes == access.MCP_SCOPE:
+			return access.allows(user_roles) and (not allowed_roles or bool(allowed_roles & user_roles))
+		return bool(allowed_roles & user_roles)
 
 	def is_public_client(self) -> bool:
 		return self.token_endpoint_auth_method == "None"

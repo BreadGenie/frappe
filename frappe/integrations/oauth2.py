@@ -23,6 +23,7 @@ from frappe.integrations.utils import (
 	get_oauth_settings,
 	validate_dynamic_client_metadata,
 )
+from frappe.mcp import access as mcp_access
 from frappe.oauth import (
 	OAuthWebRequestValidator,
 	generate_json_error_response,
@@ -466,6 +467,17 @@ def register_client():
 	issue a new client.
 	"""
 
+	requested_scopes = (client.scope or "").split()
+	if mcp_access.MCP_SCOPE in requested_scopes and requested_scopes != [mcp_access.MCP_SCOPE]:
+		response.status_code = 400
+		response.data = frappe.as_json(
+			{
+				"error": "invalid_client_metadata",
+				"error_description": "The MCP scope must be used by itself.",
+			}
+		)
+		return response
+
 	if error := validate_dynamic_client_metadata(client):
 		response.status_code = 400
 		response.data = frappe.as_json({"error": "invalid_client_metadata", "error_description": error})
@@ -510,7 +522,11 @@ def get_protected_resource_metadata():
 
 	response = Response()
 	response.mimetype = "application/json"
-	response.data = frappe.as_json(_get_protected_resource_metadata())
+	metadata = _get_protected_resource_metadata()
+	if frappe.request.path == "/.well-known/oauth-protected-resource" + mcp_access.MCP_ENDPOINT:
+		metadata["resource"] += mcp_access.MCP_ENDPOINT
+		metadata["scopes_supported"] = [mcp_access.MCP_SCOPE]
+	response.data = frappe.as_json(metadata)
 	return response
 
 

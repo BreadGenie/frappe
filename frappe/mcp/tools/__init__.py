@@ -15,6 +15,7 @@ from pydantic.json_schema import GenerateJsonSchema
 import frappe
 from frappe.mcp.protocol import INVALID_PARAMS, METHOD_NOT_FOUND, McpError
 from frappe.monitor import add_data_to_monitor
+from frappe.permissions import SYSTEM_USER_ROLE
 from frappe.utils import strip_html
 from frappe.utils.response import json_handler
 
@@ -107,7 +108,7 @@ def registry() -> tuple[Tool, ...]:
 	)
 	from frappe.mcp.tools.methods import CALL_DOCUMENT_METHOD, CALL_METHOD
 
-	return (
+	registered_tools = (
 		SEARCH_DOCTYPES,
 		GET_DOCTYPE_SCHEMA,
 		SEARCH_METHODS,
@@ -122,6 +123,17 @@ def registry() -> tuple[Tool, ...]:
 		CALL_METHOD,
 		CALL_DOCUMENT_METHOD,
 	)
+	if SYSTEM_USER_ROLE in frappe.get_roles():
+		return registered_tools
+
+	method_tools = (
+		SEARCH_METHODS,
+		GET_METHOD_SCHEMA,
+		LIST_DOCUMENT_METHODS,
+		CALL_METHOD,
+		CALL_DOCUMENT_METHOD,
+	)
+	return tuple(tool for tool in registered_tools if tool not in method_tools)
 
 
 def definitions() -> list[dict]:

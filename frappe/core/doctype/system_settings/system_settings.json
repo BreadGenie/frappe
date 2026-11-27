@@ -131,6 +131,7 @@
   "ai_agents_tab",
   "mcp_section",
   "enable_mcp",
+  "additional_mcp_roles",
   "server_name",
   "agent_instructions",
   "frappectl_section",
@@ -892,6 +893,13 @@
    "fieldname": "enable_mcp",
    "fieldtype": "Check",
    "label": "Enable MCP"
+  },
+  {
+   "description": "These roles can connect to MCP in addition to Desk User.",
+   "fieldname": "additional_mcp_roles",
+   "fieldtype": "Table MultiSelect",
+   "label": "Additional Allowed MCP Roles",
+   "options": "MCP Access Role"
   },
   {
    "description": "Name shown to AI clients. Defaults to the site's host name.",
